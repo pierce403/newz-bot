@@ -128,6 +128,8 @@ async function startAgent(privateKey, state, ownerAddress) {
   }
 
   let isStopped = false;
+  let lastErrorWasHPKE = false;
+  let hpkeErrorCount = 0;
 
   async function sendNewItemsToSubscriber(isFirstRun) {
     const newItems = getUnsentItems(MAX_ITEMS_PER_TICK);
@@ -736,30 +738,44 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Handle specific error codes that shouldn't crash the agent
       if (errorCode === 1002) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
+        lastErrorWasHPKE = true;
+        hpkeErrorCount++;
+
         log(`WARNING: Conversation streaming error (${errorCode}) - HPKE decryption failure.`);
         log(`[DEBUG] This error usually means the client sent a message encrypted for an old installation ID.`);
         log(`[DEBUG] Current Installation ID: ${agent.client.installationId}`);
         log(`[DEBUG] Current Inbox ID: ${agent.client.inboxId}`);
+        log(`[DEBUG] HPKE error count: ${hpkeErrorCount}`);
 
         log(`WARNING: The agent SDK will handle retries. The user should send another message to complete initialization.`);
-        log(`WARNING: The agent will continue running and should recover automatically.`);
-        log(`*** ACTION REQUIRED: If you are the user, please SEND ANOTHER MESSAGE to the bot. The first one triggered the key update. ***`);
-        // Don't return - let the SDK handle the error, but don't crash the agent
-        // The SDK will stop the agent, but our retry loop will restart it
+        log(`*** ACTION REQUIRED: If you are the user, please SEND ANOTHER MESSAGE to the bot. ***`);
+        log(`*** The first message triggered a key exchange. The second message should decrypt successfully. ***`);
+
+        // IMPORTANT: We will ignore the subsequent 'stop' event if it's due to this HPKE error
+        // The agent will NOT actually stop - we'll keep it running
+        return;
       }
 
       // For other errors, log but don't necessarily crash
       if (errorCause && errorCause.includes('Decryption failed')) {
+        lastErrorWasHPKE = true;
+        hpkeErrorCount++;
+
         log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
         log(`WARNING: The agent will continue running. The sender may need to send a new message to re-initialize.`);
         log(`*** ACTION REQUIRED: Please SEND ANOTHER MESSAGE to the bot. ***`);
-        // Don't return - let the SDK handle it
+        log(`[DEBUG] HPKE error count: ${hpkeErrorCount}`);
+        return;
       }
+
+      // If it's not an HPKE error, clear the flag
+      lastErrorWasHPKE = false;
     } else {
       log(`[DEBUG] Non-Agent Error caught: ${error.constructor.name}`);
       log(`Unhandled error: ${error.message}`);
       log(`Unhandled error stack: ${error.stack || 'no stack trace'}`);
       log(`Unhandled error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`);
+      lastErrorWasHPKE = false;
     }
   });
 
@@ -804,6 +820,27 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   agent.on('stop', () => {
+    log('[DEBUG] Agent stop event received.');
+
+    // If the stop was caused by an HPKE error, we should ignore it and keep running
+    if (lastErrorWasHPKE) {
+      log('[DEBUG] Stop event was triggered by HPKE error - IGNORING stop and keeping agent running.');
+      log('[DEBUG] The agent will continue to process messages. The next message from the user should work.');
+
+      // Reset the HPKE flag after a short delay to allow for recovery
+      setTimeout(() => {
+        if (lastErrorWasHPKE) {
+          log('[DEBUG] Resetting HPKE error flag after timeout.');
+          lastErrorWasHPKE = false;
+        }
+      }, 30000); // 30 seconds
+
+      // DO NOT set isStopped = true
+      // The agent should keep running
+      return;
+    }
+
+    // For non-HPKE stops, actually stop the agent
     isStopped = true;
     log('Agent stopped event received.');
     log('WARNING: Agent stop may have been triggered by an error. Check logs above for details.');
