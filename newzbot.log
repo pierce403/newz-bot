@@ -488,3 +488,13 @@ error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
 
 [2025-11-19T14:08:30.583Z] Found 5 new DB items but no subscriber; skipping send.
+[2025-11-19T14:09:30.644Z] Found 5 new DB items but no subscriber; skipping send.
+[2025-11-19T14:09:47.475Z] /reload requested by owner 0x7ab874eeef0169ada0d225e9801a3ffffa26aac3; running git pull.
+[2025-11-19T14:09:47.509Z] git pull stderr:
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+[2025-11-19T14:09:47.509Z] git pull failed: Command failed: git pull --rebase
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+
+[2025-11-19T14:10:30.688Z] Found 5 new DB items but no subscriber; skipping send.
