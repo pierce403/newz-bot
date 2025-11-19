@@ -147,20 +147,25 @@ async function startAgent(privateKey, state, ownerAddress) {
       
       // Check if recipient can receive messages
       try {
-        // canMessage might expect an array of addresses
         const addressToCheck = validHex(state.subscriberAddress);
         let canMessage;
         try {
-          canMessage = await agent.client.canMessage(addressToCheck);
+          // Try with identifier object format
+          canMessage = await agent.client.canMessage({ identifier: addressToCheck });
         } catch (err) {
-          // Try with array if single address fails
-          if (err.message && err.message.includes('array')) {
-            canMessage = await agent.client.canMessage([addressToCheck]);
-            if (Array.isArray(canMessage)) {
-              canMessage = canMessage[0];
+          // Fallback to direct address if identifier format fails
+          try {
+            canMessage = await agent.client.canMessage(addressToCheck);
+          } catch (err2) {
+            // Try with array if single address fails
+            if (err2.message && err2.message.includes('array')) {
+              canMessage = await agent.client.canMessage([addressToCheck]);
+              if (Array.isArray(canMessage)) {
+                canMessage = canMessage[0];
+              }
+            } else {
+              throw err2;
             }
-          } else {
-            throw err;
           }
         }
         log(`Can message check for ${state.subscriberAddress}: ${canMessage}`);
@@ -189,13 +194,35 @@ async function startAgent(privateKey, state, ownerAddress) {
           // Re-fetch the conversation to see if it's now initialized
           const conversations = await agent.client.conversations.list();
           log(`Found ${conversations.length} total conversations after sync`);
-          const foundConvo = conversations.find(c => 
-            c.peerAddress && c.peerAddress.toLowerCase() === state.subscriberAddress.toLowerCase()
+          
+          // Log details of all conversations for debugging
+          conversations.forEach((c, idx) => {
+            log(`Conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
+            log(`  Conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
+          });
+          
+          // Try multiple ways to match the conversation
+          const targetAddrLower = state.subscriberAddress.toLowerCase();
+          let foundConvo = conversations.find(c => 
+            c.peerAddress && c.peerAddress.toLowerCase() === targetAddrLower
           );
+          
+          // If not found by peerAddress, try by peerAccountAddress
+          if (!foundConvo) {
+            foundConvo = conversations.find(c => 
+              c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === targetAddrLower
+            );
+          }
+          
+          // If still not found, try matching by conversation ID (if we created one)
+          if (!foundConvo && dm.id) {
+            foundConvo = conversations.find(c => c.id === dm.id);
+          }
+          
           if (foundConvo) {
-            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
+            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, peerAccountAddress: ${foundConvo.peerAccountAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
             // Use the found conversation if it's better initialized
-            if (foundConvo.topic && foundConvo.peerAddress) {
+            if (foundConvo.topic && (foundConvo.peerAddress || foundConvo.peerAccountAddress)) {
               log(`Using synced conversation instead (better initialized)`);
               dm = foundConvo;
             } else {
@@ -203,7 +230,7 @@ async function startAgent(privateKey, state, ownerAddress) {
             }
           } else {
             log(`No existing conversation found after sync for ${state.subscriberAddress}, using created conversation`);
-            log(`Available conversations: ${conversations.map(c => `${c.peerAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
+            log(`Available conversations: ${conversations.map(c => `${c.peerAddress || c.peerAccountAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
           }
         } catch (syncErr) {
           log(`WARNING: Error syncing conversations: ${syncErr.message}`);
@@ -659,16 +686,22 @@ async function startAgent(privateKey, state, ownerAddress) {
             const addressToCheck = validHex(ownerAddress);
             let canMessage;
             try {
-              canMessage = await agent.client.canMessage(addressToCheck);
+              // Try with identifier object format
+              canMessage = await agent.client.canMessage({ identifier: addressToCheck });
             } catch (err) {
-              // Try with array if single address fails
-              if (err.message && err.message.includes('array')) {
-                canMessage = await agent.client.canMessage([addressToCheck]);
-                if (Array.isArray(canMessage)) {
-                  canMessage = canMessage[0];
+              // Fallback to direct address if identifier format fails
+              try {
+                canMessage = await agent.client.canMessage(addressToCheck);
+              } catch (err2) {
+                // Try with array if single address fails
+                if (err2.message && err2.message.includes('array')) {
+                  canMessage = await agent.client.canMessage([addressToCheck]);
+                  if (Array.isArray(canMessage)) {
+                    canMessage = canMessage[0];
+                  }
+                } else {
+                  throw err2;
                 }
-              } else {
-                throw err;
               }
             }
             log(`Can message check for owner: ${canMessage}`);
@@ -691,12 +724,34 @@ async function startAgent(privateKey, state, ownerAddress) {
               log(`Owner conversation sync completed`);
               const conversations = await agent.client.conversations.list();
               log(`Found ${conversations.length} total conversations after owner sync`);
-              const foundConvo = conversations.find(c => 
-                c.peerAddress && c.peerAddress.toLowerCase() === ownerAddress.toLowerCase()
+              
+              // Log details of all conversations for debugging
+              conversations.forEach((c, idx) => {
+                log(`Owner conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
+                log(`  Owner conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
+              });
+              
+              // Try multiple ways to match the conversation
+              const ownerAddrLower = ownerAddress.toLowerCase();
+              let foundConvo = conversations.find(c => 
+                c.peerAddress && c.peerAddress.toLowerCase() === ownerAddrLower
               );
+              
+              // If not found by peerAddress, try by peerAccountAddress
+              if (!foundConvo) {
+                foundConvo = conversations.find(c => 
+                  c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === ownerAddrLower
+                );
+              }
+              
+              // If still not found, try matching by conversation ID (if we created one)
+              if (!foundConvo && dm.id) {
+                foundConvo = conversations.find(c => c.id === dm.id);
+              }
+              
               if (foundConvo) {
-                log(`Found owner conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
-                if (foundConvo.topic && foundConvo.peerAddress) {
+                log(`Found owner conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, peerAccountAddress: ${foundConvo.peerAccountAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
+                if (foundConvo.topic && (foundConvo.peerAddress || foundConvo.peerAccountAddress)) {
                   log(`Using synced owner conversation`);
                   dm = foundConvo;
                 } else {
@@ -704,7 +759,7 @@ async function startAgent(privateKey, state, ownerAddress) {
                 }
               } else {
                 log(`No owner conversation found after sync, using created conversation`);
-                log(`Available conversations: ${conversations.map(c => `${c.peerAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
+                log(`Available conversations: ${conversations.map(c => `${c.peerAddress || c.peerAccountAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
               }
             } catch (syncErr) {
               log(`WARNING: Error syncing owner conversation: ${syncErr.message}`);
