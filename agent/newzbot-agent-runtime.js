@@ -123,31 +123,27 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Current installation ID: ${currentInstallationId}`);
       
       // Get all installations for this inbox
-      const installations = await agent.client.inboxState.installations;
+      const inboxState = await agent.client.inboxState();
+      const installations = inboxState.installations;
       log(`Total installations found: ${installations.length}`);
       
       // Revoke all installations except the current one
-      const oldInstallations = installations.filter(id => id !== currentInstallationId);
+      const installationsToRevoke = installations
+        .filter(installation => installation.id !== currentInstallationId)
+        .map(installation => installation.id);
       
-      if (oldInstallations.length > 0) {
-        log(`Found ${oldInstallations.length} old installation(s) to revoke: ${oldInstallations.join(', ')}`);
+      if (installationsToRevoke.length > 0) {
+        log(`Found ${installationsToRevoke.length} old installation(s) to revoke: ${installationsToRevoke.join(', ')}`);
         
-        for (const oldId of oldInstallations) {
-          try {
-            log(`Attempting to revoke installation: ${oldId}`);
-            await agent.client.revokeInstallations([oldId]);
-            log(`✓ Successfully revoked installation: ${oldId}`);
-          } catch (revokeErr) {
-            log(`WARNING: Failed to revoke installation ${oldId}: ${revokeErr.message}`);
-          }
-        }
-        
-        log(`✓ Finished revoking old installations. Only ${currentInstallationId} should remain active.`);
+        await agent.client.revokeInstallations(installationsToRevoke);
+        log(`✓ Successfully revoked ${installationsToRevoke.length} old installation(s).`);
+        log(`✓ Only installation ${currentInstallationId} should remain active.`);
       } else {
         log(`✓ No old installations to revoke. This is the only installation.`);
       }
     } catch (installErr) {
       log(`WARNING: Error checking/revoking installations: ${installErr.message}`);
+      log(`WARNING: Stack: ${installErr.stack}`);
       log(`WARNING: Multiple installations may cause HPKE decryption errors.`);
     }
   } catch (err) {
