@@ -147,13 +147,29 @@ async function startAgent(privateKey, state, ownerAddress) {
       
       // Check if recipient can receive messages
       try {
-        const canMessage = await agent.client.canMessage(validHex(state.subscriberAddress));
+        // canMessage might expect an array of addresses
+        const addressToCheck = validHex(state.subscriberAddress);
+        let canMessage;
+        try {
+          canMessage = await agent.client.canMessage(addressToCheck);
+        } catch (err) {
+          // Try with array if single address fails
+          if (err.message && err.message.includes('array')) {
+            canMessage = await agent.client.canMessage([addressToCheck]);
+            if (Array.isArray(canMessage)) {
+              canMessage = canMessage[0];
+            }
+          } else {
+            throw err;
+          }
+        }
         log(`Can message check for ${state.subscriberAddress}: ${canMessage}`);
         if (!canMessage) {
           log(`WARNING: Cannot message ${state.subscriberAddress} - they may not have XMTP enabled or may have blocked this address`);
         }
       } catch (canMsgErr) {
         log(`WARNING: Error checking canMessage: ${canMsgErr.message}`);
+        log(`WARNING: canMessage error stack: ${canMsgErr.stack}`);
       }
       
       let dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
@@ -172,18 +188,22 @@ async function startAgent(privateKey, state, ownerAddress) {
           
           // Re-fetch the conversation to see if it's now initialized
           const conversations = await agent.client.conversations.list();
+          log(`Found ${conversations.length} total conversations after sync`);
           const foundConvo = conversations.find(c => 
             c.peerAddress && c.peerAddress.toLowerCase() === state.subscriberAddress.toLowerCase()
           );
           if (foundConvo) {
-            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}`);
+            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
             // Use the found conversation if it's better initialized
             if (foundConvo.topic && foundConvo.peerAddress) {
               log(`Using synced conversation instead (better initialized)`);
               dm = foundConvo;
+            } else {
+              log(`Synced conversation also uninitialized, keeping created conversation`);
             }
           } else {
-            log(`No existing conversation found after sync, using created conversation`);
+            log(`No existing conversation found after sync for ${state.subscriberAddress}, using created conversation`);
+            log(`Available conversations: ${conversations.map(c => `${c.peerAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
           }
         } catch (syncErr) {
           log(`WARNING: Error syncing conversations: ${syncErr.message}`);
@@ -636,13 +656,28 @@ async function startAgent(privateKey, state, ownerAddress) {
           
           // Check if owner can receive messages
           try {
-            const canMessage = await agent.client.canMessage(validHex(ownerAddress));
+            const addressToCheck = validHex(ownerAddress);
+            let canMessage;
+            try {
+              canMessage = await agent.client.canMessage(addressToCheck);
+            } catch (err) {
+              // Try with array if single address fails
+              if (err.message && err.message.includes('array')) {
+                canMessage = await agent.client.canMessage([addressToCheck]);
+                if (Array.isArray(canMessage)) {
+                  canMessage = canMessage[0];
+                }
+              } else {
+                throw err;
+              }
+            }
             log(`Can message check for owner: ${canMessage}`);
             if (!canMessage) {
               log(`WARNING: Cannot message owner - they may not have XMTP enabled`);
             }
           } catch (canMsgErr) {
             log(`WARNING: Error checking canMessage for owner: ${canMsgErr.message}`);
+            log(`WARNING: canMessage error stack: ${canMsgErr.stack}`);
           }
           
           let dm = await agent.createDmWithAddress(validHex(ownerAddress));
@@ -653,16 +688,27 @@ async function startAgent(privateKey, state, ownerAddress) {
             log(`WARNING: Owner conversation appears uninitialized, attempting sync...`);
             try {
               await agent.client.conversations.sync();
+              log(`Owner conversation sync completed`);
               const conversations = await agent.client.conversations.list();
+              log(`Found ${conversations.length} total conversations after owner sync`);
               const foundConvo = conversations.find(c => 
                 c.peerAddress && c.peerAddress.toLowerCase() === ownerAddress.toLowerCase()
               );
-              if (foundConvo && foundConvo.topic && foundConvo.peerAddress) {
-                log(`Using synced owner conversation`);
-                dm = foundConvo;
+              if (foundConvo) {
+                log(`Found owner conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
+                if (foundConvo.topic && foundConvo.peerAddress) {
+                  log(`Using synced owner conversation`);
+                  dm = foundConvo;
+                } else {
+                  log(`Synced owner conversation also uninitialized, keeping created conversation`);
+                }
+              } else {
+                log(`No owner conversation found after sync, using created conversation`);
+                log(`Available conversations: ${conversations.map(c => `${c.peerAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
               }
             } catch (syncErr) {
               log(`WARNING: Error syncing owner conversation: ${syncErr.message}`);
+              log(`WARNING: Sync error stack: ${syncErr.stack}`);
             }
           }
           
