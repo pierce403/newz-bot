@@ -709,10 +709,23 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   agent.on('unhandledError', (error) => {
+    // Enhanced error logging for debugging HPKE issues
     if (error instanceof AgentError) {
       const errorCode = error.code;
       const errorMessage = error.message;
       const errorCause = error.cause ? String(error.cause) : '';
+
+      log(`[DEBUG] AgentError caught: Code=${errorCode}, Message="${errorMessage}"`);
+      if (error.cause) {
+        log(`[DEBUG] Cause: ${errorCause}`);
+        if (typeof error.cause === 'object') {
+          try {
+            log(`[DEBUG] Cause details: ${JSON.stringify(error.cause, Object.getOwnPropertyNames(error.cause))}`);
+          } catch (e) {
+            log(`[DEBUG] Could not serialize cause object`);
+          }
+        }
+      }
 
       log(
         `Unhandled AgentError (${errorCode}): ${errorMessage}${errorCause ? `; cause=${errorCause}` : ''
@@ -723,13 +736,11 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Handle specific error codes that shouldn't crash the agent
       if (errorCode === 1002) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
-        // This can happen when:
-        // 1. A user tries to message the bot before the conversation is fully initialized
-        // 2. Encryption keys are out of sync
-        // 3. Welcome messages can't be decrypted
-        // The agent SDK will handle retrying, so we should log but not crash
         log(`WARNING: Conversation streaming error (${errorCode}) - HPKE decryption failure.`);
-        log(`WARNING: This often happens when a user initiates a conversation before it's fully initialized.`);
+        log(`[DEBUG] This error usually means the client sent a message encrypted for an old installation ID.`);
+        log(`[DEBUG] Current Installation ID: ${agent.client.installationId}`);
+        log(`[DEBUG] Current Inbox ID: ${agent.client.inboxId}`);
+
         log(`WARNING: The agent SDK will handle retries. The user should send another message to complete initialization.`);
         log(`WARNING: The agent will continue running and should recover automatically.`);
         log(`*** ACTION REQUIRED: If you are the user, please SEND ANOTHER MESSAGE to the bot. The first one triggered the key update. ***`);
@@ -745,6 +756,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         // Don't return - let the SDK handle it
       }
     } else {
+      log(`[DEBUG] Non-Agent Error caught: ${error.constructor.name}`);
       log(`Unhandled error: ${error.message}`);
       log(`Unhandled error stack: ${error.stack || 'no stack trace'}`);
       log(`Unhandled error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`);
