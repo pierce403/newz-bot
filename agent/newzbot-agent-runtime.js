@@ -145,37 +145,8 @@ async function startAgent(privateKey, state, ownerAddress) {
     try {
       log(`Creating DM conversation with address: ${state.subscriberAddress}`);
       
-      // Check if recipient can receive messages
-      try {
-        const addressToCheck = validHex(state.subscriberAddress);
-        let canMessage;
-        try {
-          // Try with identifier object format
-          canMessage = await agent.client.canMessage({ identifier: addressToCheck });
-        } catch (err) {
-          // Fallback to direct address if identifier format fails
-          try {
-            canMessage = await agent.client.canMessage(addressToCheck);
-          } catch (err2) {
-            // Try with array if single address fails
-            if (err2.message && err2.message.includes('array')) {
-              canMessage = await agent.client.canMessage([addressToCheck]);
-              if (Array.isArray(canMessage)) {
-                canMessage = canMessage[0];
-              }
-            } else {
-              throw err2;
-            }
-          }
-        }
-        log(`Can message check for ${state.subscriberAddress}: ${canMessage}`);
-        if (!canMessage) {
-          log(`WARNING: Cannot message ${state.subscriberAddress} - they may not have XMTP enabled or may have blocked this address`);
-        }
-      } catch (canMsgErr) {
-        log(`WARNING: Error checking canMessage: ${canMsgErr.message}`);
-        log(`WARNING: canMessage error stack: ${canMsgErr.stack}`);
-      }
+      // Note: canMessage check removed - it's not critical and was causing API errors.
+      // Messages will be sent regardless, and any delivery issues will surface as send errors.
       
       let dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
       log(`DM conversation created. Conversation ID: ${dm.id}`);
@@ -702,30 +673,8 @@ async function startAgent(privateKey, state, ownerAddress) {
         try {
           log(`Attempting to send startup notification to owner at ${ownerAddress}...`);
           
-          // Check if owner can receive messages
-          try {
-            const addressToCheck = validHex(ownerAddress);
-            let canMessage;
-            try {
-              // Try with identifier object format
-              log(`Trying canMessage with identifier format: { identifier: "${addressToCheck}" }`);
-              canMessage = await agent.client.canMessage({ identifier: addressToCheck });
-              log(`canMessage with identifier format succeeded: ${canMessage}`);
-            } catch (err) {
-              log(`canMessage with identifier format failed: ${err.message}`);
-              // Skip canMessage check if it fails - not critical for sending
-              canMessage = null;
-            }
-            if (canMessage !== null && canMessage !== undefined) {
-              log(`Can message check for owner: ${canMessage}`);
-              if (!canMessage) {
-                log(`WARNING: Cannot message owner - they may not have XMTP enabled`);
-              }
-            }
-          } catch (canMsgErr) {
-            log(`WARNING: Error checking canMessage for owner: ${canMsgErr.message}`);
-            log(`WARNING: canMessage error stack: ${canMsgErr.stack}`);
-          }
+          // Note: canMessage check removed - it's not critical and was causing API errors.
+          // Messages will be sent regardless, and any delivery issues will surface as send errors.
           
           let dm = await agent.createDmWithAddress(validHex(ownerAddress));
           log(`Created DM with owner. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
