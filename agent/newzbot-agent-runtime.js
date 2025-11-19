@@ -71,6 +71,22 @@ function formatNewsText(item) {
   return `📰 ${item.title}${datePart}\n${item.link}`;
 }
 
+function formatSource(item) {
+  if (item.source) {
+    return item.source;
+  }
+  if (item.link) {
+    try {
+      // new URL requires an absolute URL; wrap in try/catch to avoid crashes.
+      const url = new URL(item.link);
+      return url.hostname;
+    } catch {
+      // fall through
+    }
+  }
+  return 'unknown';
+}
+
 async function startAgent(privateKey, state, ownerAddress) {
   const { Agent, AgentError, ConversationContext, validHex } = await import('@xmtp/agent-sdk');
   const { CommandRouter } = await import('@xmtp/agent-sdk/middleware');
@@ -86,6 +102,8 @@ async function startAgent(privateKey, state, ownerAddress) {
     env: XMTP_ENV,
     dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
   });
+
+  let isStopped = false;
 
   async function sendNewItemsToSubscriber(isFirstRun) {
     const newItems = getUnsentItems(MAX_ITEMS_PER_TICK);
@@ -124,6 +142,10 @@ async function startAgent(privateKey, state, ownerAddress) {
 
     // Immediately check once on startup, then on interval.
     for (;;) {
+      if (isStopped) {
+        log('Feed loop detected agent stop; exiting.');
+        throw new Error('Agent stopped');
+      }
       try {
         await sendNewItemsToSubscriber(isFirstRun);
         isFirstRun = false;
@@ -244,7 +266,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     }
 
     const lines = items.map((item, index) => {
-      const source = item.source || (item.link ? new URL(item.link).hostname : 'unknown');
+      const source = formatSource(item);
       return `${index + 1}. ${item.title} (${source})\n${item.link}`;
     });
 
@@ -286,7 +308,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     }
 
     const lines = matches.map((item, index) => {
-      const source = item.source || (item.link ? new URL(item.link).hostname : 'unknown');
+      const source = formatSource(item);
       return `${index + 1}. ${item.title} (${source})\n${item.link}`;
     });
 
@@ -360,6 +382,7 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   agent.on('stop', () => {
+    isStopped = true;
     log('Agent stopped.');
   });
 
