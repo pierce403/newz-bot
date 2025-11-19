@@ -115,6 +115,41 @@ async function startAgent(privateKey, state, ownerAddress) {
       dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
     });
     log('XMTP agent created successfully');
+    
+    // Check for multiple installations and revoke old ones
+    // A bot should only have one active installation at a time
+    try {
+      const currentInstallationId = agent.client.installationId;
+      log(`Current installation ID: ${currentInstallationId}`);
+      
+      // Get all installations for this inbox
+      const installations = await agent.client.inboxState.installations;
+      log(`Total installations found: ${installations.length}`);
+      
+      // Revoke all installations except the current one
+      const oldInstallations = installations.filter(id => id !== currentInstallationId);
+      
+      if (oldInstallations.length > 0) {
+        log(`Found ${oldInstallations.length} old installation(s) to revoke: ${oldInstallations.join(', ')}`);
+        
+        for (const oldId of oldInstallations) {
+          try {
+            log(`Attempting to revoke installation: ${oldId}`);
+            await agent.client.revokeInstallations([oldId]);
+            log(`✓ Successfully revoked installation: ${oldId}`);
+          } catch (revokeErr) {
+            log(`WARNING: Failed to revoke installation ${oldId}: ${revokeErr.message}`);
+          }
+        }
+        
+        log(`✓ Finished revoking old installations. Only ${currentInstallationId} should remain active.`);
+      } else {
+        log(`✓ No old installations to revoke. This is the only installation.`);
+      }
+    } catch (installErr) {
+      log(`WARNING: Error checking/revoking installations: ${installErr.message}`);
+      log(`WARNING: Multiple installations may cause HPKE decryption errors.`);
+    }
   } catch (err) {
     log(`ERROR: Failed to create XMTP agent: ${err.message}`);
     log(`ERROR: Stack trace: ${err.stack}`);
