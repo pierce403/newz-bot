@@ -32,13 +32,16 @@ function log(message) {
 function ensureKeypair() {
   if (fs.existsSync(KEY_PATH)) {
     const existing = fs.readFileSync(KEY_PATH, 'utf8').trim();
+    const wallet = new Wallet(existing);
     log(`Using existing key at ${KEY_PATH}`);
+    log(`Bot wallet address: ${wallet.address}`);
     return existing;
   }
 
   const wallet = Wallet.createRandom();
   fs.writeFileSync(KEY_PATH, wallet.privateKey, { mode: 0o600 });
   log(`Created new wallet and saved private key to ${KEY_PATH}`);
+  log(`Bot wallet address: ${wallet.address}`);
   return wallet.privateKey;
 }
 
@@ -95,14 +98,28 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   log('Starting newzbot XMTP agent (runtime)...');
   log(`XMTP environment: ${XMTP_ENV}`);
+  log(`Database path: ${path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`)}`);
+  log(`Subscriber address from state: ${state.subscriberAddress || 'none'}`);
+
+  const wallet = new Wallet(privateKey);
+  log(`Bot wallet address: ${wallet.address}`);
 
   const user = createUser(validHex(privateKey));
   const signer = createSigner(user);
 
-  const agent = await Agent.create(signer, {
-    env: XMTP_ENV,
-    dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
-  });
+  log('Creating XMTP agent...');
+  let agent;
+  try {
+    agent = await Agent.create(signer, {
+      env: XMTP_ENV,
+      dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
+    });
+    log('XMTP agent created successfully');
+  } catch (err) {
+    log(`ERROR: Failed to create XMTP agent: ${err.message}`);
+    log(`ERROR: Stack trace: ${err.stack}`);
+    throw err;
+  }
 
   let isStopped = false;
 
@@ -123,20 +140,55 @@ async function startAgent(privateKey, state, ownerAddress) {
       return;
     }
 
-    const dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
-    const ctx = new ConversationContext({ conversation: dm, client: agent.client });
+    log(`Attempting to send ${newItems.length} items to subscriber ${state.subscriberAddress}...`);
 
-    log(
-      `Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress} in conversation ${dm.id}.`,
-    );
+    try {
+      log(`Creating DM conversation with address: ${state.subscriberAddress}`);
+      const dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
+      log(`DM conversation created successfully. Conversation ID: ${dm.id}`);
+      
+      const ctx = new ConversationContext({ conversation: dm, client: agent.client });
+      log(`Conversation context created. Client address: ${agent.client.address || 'unknown'}`);
 
-    for (const item of newItems) {
-      const text = formatNewsText(item);
-      await ctx.sendText(text);
-      log(`Sent item: ${item.title}`);
+      log(
+        `Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress} in conversation ${dm.id}.`,
+      );
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const item of newItems) {
+        try {
+          const text = formatNewsText(item);
+          log(`Attempting to send message for item: ${item.title} (ID: ${item.id})`);
+          await ctx.sendText(text);
+          log(`✓ Successfully sent item: ${item.title} (ID: ${item.id})`);
+          successCount++;
+        } catch (err) {
+          failCount++;
+          log(`✗ ERROR sending item "${item.title}" (ID: ${item.id}): ${err.message}`);
+          log(`✗ Error stack: ${err.stack}`);
+          log(`✗ Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
+          // Continue with other items even if one fails
+        }
+      }
+
+      if (successCount > 0) {
+        log(`Successfully sent ${successCount} out of ${newItems.length} items.`);
+        markItemsSent(newItems.map((item) => item.id));
+      } else {
+        log(`ERROR: Failed to send all ${newItems.length} items. Not marking as sent.`);
+      }
+
+      if (failCount > 0) {
+        log(`WARNING: ${failCount} items failed to send. Check logs above for details.`);
+      }
+    } catch (err) {
+      log(`ERROR: Failed to create conversation or send messages: ${err.message}`);
+      log(`ERROR: Stack trace: ${err.stack}`);
+      log(`ERROR: Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
+      throw err;
     }
-
-    markItemsSent(newItems.map((item) => item.id));
   }
 
   async function runFeedLoop() {
@@ -154,6 +206,8 @@ async function startAgent(privateKey, state, ownerAddress) {
         isFirstRun = false;
       } catch (err) {
         log(`Feed loop error: ${err.message}`);
+        log(`Feed loop error stack: ${err.stack}`);
+        log(`Feed loop error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
       }
 
       await new Promise((resolve) => setTimeout(resolve, FEED_INTERVAL_MS));
@@ -206,28 +260,45 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   router.command('/list', async (ctx) => {
+    const sender = await ctx.getSenderAddress();
+    log(`/list command received from ${sender || 'unknown'}`);
     const feeds = listFeeds();
 
-    if (!feeds.length) {
-      await ctx.sendText('No feeds configured. Use /add <url> to add one.');
-      return;
+    try {
+      if (!feeds.length) {
+        await ctx.sendText('No feeds configured. Use /add <url> to add one.');
+        log(`✓ Sent /list response (no feeds) to ${sender || 'unknown'}`);
+        return;
+      }
+
+      const lines = feeds.map((feed) => {
+        const label = feed.title || feed.url;
+        return `${feed.id}. ${label}\n${feed.url}`;
+      });
+
+      const header = 'Configured RSS feeds:';
+      const body = [header, ...lines].join('\n\n');
+      await ctx.sendText(body);
+      log(`✓ Sent /list response (${feeds.length} feeds) to ${sender || 'unknown'}`);
+    } catch (err) {
+      log(`✗ ERROR sending /list response: ${err.message}`);
+      log(`✗ Error stack: ${err.stack}`);
     }
-
-    const lines = feeds.map((feed) => {
-      const label = feed.title || feed.url;
-      return `${feed.id}. ${label}\n${feed.url}`;
-    });
-
-    const header = 'Configured RSS feeds:';
-    const body = [header, ...lines].join('\n\n');
-    await ctx.sendText(body);
   });
 
   router.command('/add', async (ctx) => {
+    const sender = await ctx.getSenderAddress();
     const raw = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
     const trimmed = raw.trim();
+    log(`/add command received from ${sender || 'unknown'}: "${trimmed}"`);
+    
     if (!trimmed) {
-      await ctx.sendText('Usage: /add <feed-url>');
+      try {
+        await ctx.sendText('Usage: /add <feed-url>');
+        log(`✓ Sent /add usage response to ${sender || 'unknown'}`);
+      } catch (err) {
+        log(`✗ ERROR sending /add usage response: ${err.message}`);
+      }
       return;
     }
 
@@ -237,8 +308,14 @@ async function startAgent(privateKey, state, ownerAddress) {
       const feed = addFeed(url, null);
       const label = feed.title || feed.url;
       await ctx.sendText(`Added feed #${feed.id}: ${label}\n${feed.url}\n\nRun the collector to fetch new items.`);
+      log(`✓ Added feed #${feed.id} and sent confirmation to ${sender || 'unknown'}`);
     } catch (err) {
-      await ctx.sendText(`Failed to add feed: ${err.message}`);
+      log(`✗ ERROR adding feed: ${err.message}`);
+      try {
+        await ctx.sendText(`Failed to add feed: ${err.message}`);
+      } catch (sendErr) {
+        log(`✗ ERROR sending /add error response: ${sendErr.message}`);
+      }
     }
   });
 
@@ -322,7 +399,11 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   router.command('/start', async (ctx) => {
     const sender = await ctx.getSenderAddress();
+    const convoId = ctx.conversation?.id || 'unknown';
+    log(`/start command received from ${sender || 'unknown'} in conversation ${convoId}`);
+    
     if (!sender) {
+      log(`WARNING: /start command but unable to determine sender address`);
       await ctx.sendText("Hi, I can't do anything yet.");
       return;
     }
@@ -335,9 +416,17 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Registered new subscriber: ${sender}`);
     } else if (previous !== sender) {
       log(`Switched subscriber from ${previous} to ${sender}`);
+    } else {
+      log(`Subscriber ${sender} already registered (re-subscribing)`);
     }
 
-    await ctx.sendText("Hi, I can't do anything yet.");
+    try {
+      await ctx.sendText("Hi, I can't do anything yet.");
+      log(`✓ Sent /start response to ${sender}`);
+    } catch (err) {
+      log(`✗ ERROR sending /start response: ${err.message}`);
+      log(`✗ Error stack: ${err.stack}`);
+    }
   });
 
   router.command('/stop', async (ctx) => {
@@ -357,11 +446,18 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   router.default(async (ctx) => {
+    const sender = await ctx.getSenderAddress();
     const text = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
-    log(`Received non-command message: "${text}"`);
-    await ctx.sendText(
-      'Hi, I am newz.bot. Available commands: /help, /start, /stop, /reload, /list, /add, /remove, /search <query>, /recent.',
-    );
+    log(`Received non-command message from ${sender || 'unknown'}: "${text}"`);
+    try {
+      await ctx.sendText(
+        'Hi, I am newz.bot. Available commands: /help, /start, /stop, /reload, /list, /add, /remove, /search <query>, /recent.',
+      );
+      log(`✓ Sent default response to ${sender || 'unknown'}`);
+    } catch (err) {
+      log(`✗ ERROR sending default response: ${err.message}`);
+      log(`✗ Error stack: ${err.stack}`);
+    }
   });
 
   agent.use(router.middleware());
@@ -370,19 +466,19 @@ async function startAgent(privateKey, state, ownerAddress) {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation.id;
     const msgId = ctx.message.id;
+    const content = ctx.message.content || '';
     log(
-      `Received text from ${sender || 'unknown'} in conversation ${convoId}, msg ${msgId}: ${
-        ctx.message.content
-      }`,
+      `Received text from ${sender || 'unknown'} in conversation ${convoId}, msg ${msgId}: ${content}`,
     );
+    log(`Message details - conversation topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}`);
 
     if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
       if (!state.ownerHasContacted) {
         state.ownerHasContacted = true;
         saveState(state);
-         log('Owner has contacted the bot; startup notifications will be sent on future restarts.');
-       }
-     }
+        log('Owner has contacted the bot; startup notifications will be sent on future restarts.');
+      }
+    }
   });
 
   agent.on('unhandledError', (error) => {
@@ -392,8 +488,11 @@ async function startAgent(privateKey, state, ownerAddress) {
           error.cause ? `; cause=${String(error.cause)}` : ''
         }`,
       );
+      log(`Unhandled AgentError stack: ${error.stack || 'no stack trace'}`);
     } else {
       log(`Unhandled error: ${error.message}`);
+      log(`Unhandled error stack: ${error.stack || 'no stack trace'}`);
+      log(`Unhandled error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`);
     }
   });
 
@@ -403,17 +502,30 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(
       `Client inboxId=${ctx.client.inboxId}, installationId=${ctx.client.installationId}, isRegistered=${ctx.client.isRegistered}`,
     );
+    log(`Agent client state - address: ${agent.client.address || 'unknown'}, env: ${XMTP_ENV}`);
+
+    // Verify consistency: wallet address should match client address
+    const wallet = new Wallet(privateKey);
+    if (addr && addr.toLowerCase() !== wallet.address.toLowerCase()) {
+      log(`WARNING: Address mismatch! Wallet address: ${wallet.address}, Client address: ${addr}`);
+    } else {
+      log(`✓ Address consistency check passed: ${wallet.address} matches client address`);
+    }
 
     // Notify owner address that the bot is online once the agent is fully started.
     if (ownerAddress) {
       (async () => {
         try {
+          log(`Attempting to send startup notification to owner at ${ownerAddress}...`);
           const dm = await agent.createDmWithAddress(validHex(ownerAddress));
+          log(`Created DM with owner. Conversation ID: ${dm.id}`);
           const notifyCtx = new ConversationContext({ conversation: dm, client: agent.client });
           await notifyCtx.sendText('news bot online');
-          log(`Sent startup notification to owner at ${ownerAddress}.`);
+          log(`✓ Sent startup notification to owner at ${ownerAddress}.`);
         } catch (err) {
-          log(`Failed to send startup notification: ${err.message}`);
+          log(`✗ ERROR: Failed to send startup notification: ${err.message}`);
+          log(`✗ Startup notification error stack: ${err.stack}`);
+          log(`✗ Startup notification error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
         }
       })();
     } else {
@@ -426,28 +538,53 @@ async function startAgent(privateKey, state, ownerAddress) {
     log('Agent stopped.');
   });
 
-  await agent.start();
-  log('Agent has started; entering feed loop.');
+  log('Starting agent...');
+  try {
+    await agent.start();
+    log('✓ Agent has started successfully; entering feed loop.');
+  } catch (err) {
+    log(`✗ ERROR: Failed to start agent: ${err.message}`);
+    log(`✗ Agent start error stack: ${err.stack}`);
+    log(`✗ Agent start error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
+    throw err;
+  }
 
   await runFeedLoop();
 }
 
 async function main() {
+  log('=== newzbot agent main() starting ===');
+  log(`Environment variables:`);
+  log(`  NEWZBOT_XMTP_ENV: ${process.env.NEWZBOT_XMTP_ENV || '(not set)'}`);
+  log(`  XMTP_ENV: ${process.env.XMTP_ENV || '(not set)'}`);
+  log(`  NEWZBOT_LOG_PATH: ${process.env.NEWZBOT_LOG_PATH || '(not set)'}`);
+  log(`  NEWZBOT_KEY_PATH: ${process.env.NEWZBOT_KEY_PATH || '(not set)'}`);
+  log(`  NEWZBOT_STATE_PATH: ${process.env.NEWZBOT_STATE_PATH || '(not set)'}`);
+  log(`  NEWZBOT_FEED_INTERVAL_MS: ${process.env.NEWZBOT_FEED_INTERVAL_MS || '(not set)'}`);
+  log(`  NEWZBOT_MAX_ITEMS_PER_TICK: ${process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '(not set)'}`);
+  log(`  WEB3BIO_API_KEY: ${process.env.WEB3BIO_API_KEY ? '(set)' : '(not set)'}`);
+  log(`Resolved XMTP_ENV: ${XMTP_ENV}`);
+  log(`Working directory: ${process.cwd()}`);
+
   const privateKey = ensureKeypair();
   const state = loadState();
+  log(`Loaded state - subscriberAddress: ${state.subscriberAddress || 'none'}`);
+  
   let ownerAddress = null;
 
   try {
     const { createNameResolver } = await import('@xmtp/agent-sdk/user');
     const resolveName = createNameResolver(process.env.WEB3BIO_API_KEY);
+    log(`Attempting to resolve owner name "${OWNER_NAME}"...`);
     ownerAddress = await resolveName(OWNER_NAME);
     if (ownerAddress) {
-      log(`Resolved owner "${OWNER_NAME}" to address ${ownerAddress}.`);
+      log(`✓ Resolved owner "${OWNER_NAME}" to address ${ownerAddress}.`);
     } else {
-      log(`Failed to resolve owner "${OWNER_NAME}" to an address; owner-only commands disabled.`);
+      log(`✗ Failed to resolve owner "${OWNER_NAME}" to an address; owner-only commands disabled.`);
     }
   } catch (err) {
-    log(`Error resolving owner "${OWNER_NAME}": ${err.message}`);
+    log(`✗ Error resolving owner "${OWNER_NAME}": ${err.message}`);
+    log(`✗ Owner resolution error stack: ${err.stack}`);
   }
 
   let attempt = 0;
@@ -459,7 +596,9 @@ async function main() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      log(`Starting agent attempt #${attempt + 1}...`);
       await startAgent(privateKey, state, ownerAddress);
+      log(`Agent started successfully on attempt #${attempt + 1}`);
       return;
     } catch (err) {
       attempt += 1;
@@ -477,9 +616,11 @@ async function main() {
       const jitter = Math.floor(backoff * 0.2 * Math.random());
       const delay = backoff + jitter;
 
+      log(`✗ Agent error on attempt ${attempt}: ${message}`);
+      log(`✗ Error stack: ${err.stack || 'no stack trace'}`);
+      log(`✗ Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
       log(
-        `Agent error (attempt ${attempt}): ${message}. ` +
-          `Backing off for approximately ${Math.round(delay / 1000)}s before retrying.`,
+        `Backing off for approximately ${Math.round(delay / 1000)}s before retrying (isRateLimit: ${isRateLimit}).`,
       );
 
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -488,6 +629,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  log(`Fatal error outside retry loop: ${err.message}`);
+  log(`✗ FATAL ERROR outside retry loop: ${err.message}`);
+  log(`✗ Fatal error stack: ${err.stack || 'no stack trace'}`);
+  log(`✗ Fatal error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
   process.exit(1);
 });
