@@ -199,6 +199,27 @@ async function startAgent(privateKey, state, ownerAddress) {
           conversations.forEach((c, idx) => {
             log(`Conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
             log(`  Conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
+            // Try to serialize the whole object to see its structure
+            try {
+              const serialized = JSON.stringify(c, (key, value) => {
+                if (typeof value === 'object' && value !== null) {
+                  return Object.getOwnPropertyNames(value).reduce((acc, prop) => {
+                    try {
+                      acc[prop] = value[prop];
+                    } catch (e) {
+                      acc[prop] = '[unable to access]';
+                    }
+                    return acc;
+                  }, {});
+                }
+                return value;
+              }, 2);
+              log(`  Conversation ${idx} full structure: ${serialized}`);
+            } catch (serializeErr) {
+              log(`  Conversation ${idx} serialization failed: ${serializeErr.message}`);
+            }
+            // Try accessing properties directly
+            log(`  Conversation ${idx} direct access - id: ${c.id}, topic: ${c.topic}, peerAddress: ${c.peerAddress}, peerAccountAddress: ${c.peerAccountAddress}`);
           });
           
           // Try multiple ways to match the conversation
@@ -687,26 +708,19 @@ async function startAgent(privateKey, state, ownerAddress) {
             let canMessage;
             try {
               // Try with identifier object format
+              log(`Trying canMessage with identifier format: { identifier: "${addressToCheck}" }`);
               canMessage = await agent.client.canMessage({ identifier: addressToCheck });
+              log(`canMessage with identifier format succeeded: ${canMessage}`);
             } catch (err) {
-              // Fallback to direct address if identifier format fails
-              try {
-                canMessage = await agent.client.canMessage(addressToCheck);
-              } catch (err2) {
-                // Try with array if single address fails
-                if (err2.message && err2.message.includes('array')) {
-                  canMessage = await agent.client.canMessage([addressToCheck]);
-                  if (Array.isArray(canMessage)) {
-                    canMessage = canMessage[0];
-                  }
-                } else {
-                  throw err2;
-                }
-              }
+              log(`canMessage with identifier format failed: ${err.message}`);
+              // Skip canMessage check if it fails - not critical for sending
+              canMessage = null;
             }
-            log(`Can message check for owner: ${canMessage}`);
-            if (!canMessage) {
-              log(`WARNING: Cannot message owner - they may not have XMTP enabled`);
+            if (canMessage !== null && canMessage !== undefined) {
+              log(`Can message check for owner: ${canMessage}`);
+              if (!canMessage) {
+                log(`WARNING: Cannot message owner - they may not have XMTP enabled`);
+              }
             }
           } catch (canMsgErr) {
             log(`WARNING: Error checking canMessage for owner: ${canMsgErr.message}`);
@@ -729,6 +743,27 @@ async function startAgent(privateKey, state, ownerAddress) {
               conversations.forEach((c, idx) => {
                 log(`Owner conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
                 log(`  Owner conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
+                // Try to serialize the whole object to see its structure
+                try {
+                  const serialized = JSON.stringify(c, (key, value) => {
+                    if (typeof value === 'object' && value !== null) {
+                      return Object.getOwnPropertyNames(value).reduce((acc, prop) => {
+                        try {
+                          acc[prop] = value[prop];
+                        } catch (e) {
+                          acc[prop] = '[unable to access]';
+                        }
+                        return acc;
+                      }, {});
+                    }
+                    return value;
+                  }, 2);
+                  log(`  Owner conversation ${idx} full structure: ${serialized}`);
+                } catch (serializeErr) {
+                  log(`  Owner conversation ${idx} serialization failed: ${serializeErr.message}`);
+                }
+                // Try accessing properties directly
+                log(`  Owner conversation ${idx} direct access - id: ${c.id}, topic: ${c.topic}, peerAddress: ${c.peerAddress}, peerAccountAddress: ${c.peerAccountAddress}`);
               });
               
               // Try multiple ways to match the conversation
