@@ -126,7 +126,9 @@ async function startAgent(privateKey, state, ownerAddress) {
     const dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
     const ctx = new ConversationContext({ conversation: dm, client: agent.client });
 
-    log(`Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress}.`);
+    log(
+      `Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress} in conversation ${dm.id}.`,
+    );
 
     for (const item of newItems) {
       const text = formatNewsText(item);
@@ -366,12 +368,18 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   agent.on('text', async (ctx) => {
     const sender = await ctx.getSenderAddress();
-    log(`Received text from ${sender || 'unknown'}: ${ctx.message.content}`);
+    const convoId = ctx.conversation.id;
+    const msgId = ctx.message.id;
+    log(
+      `Received text from ${sender || 'unknown'} in conversation ${convoId}, msg ${msgId}: ${
+        ctx.message.content
+      }`,
+    );
 
-     if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
-       if (!state.ownerHasContacted) {
-         state.ownerHasContacted = true;
-         saveState(state);
+    if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
+      if (!state.ownerHasContacted) {
+        state.ownerHasContacted = true;
+        saveState(state);
          log('Owner has contacted the bot; startup notifications will be sent on future restarts.');
        }
      }
@@ -379,7 +387,11 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   agent.on('unhandledError', (error) => {
     if (error instanceof AgentError) {
-      log(`Unhandled AgentError (${error.code}): ${error.message}`);
+      log(
+        `Unhandled AgentError (${error.code}): ${error.message}${
+          error.cause ? `; cause=${String(error.cause)}` : ''
+        }`,
+      );
     } else {
       log(`Unhandled error: ${error.message}`);
     }
@@ -388,6 +400,9 @@ async function startAgent(privateKey, state, ownerAddress) {
   agent.on('start', (ctx) => {
     const addr = ctx.getClientAddress();
     log(`Agent online. Address: ${addr || 'unknown'}`);
+    log(
+      `Client inboxId=${ctx.client.inboxId}, installationId=${ctx.client.installationId}, isRegistered=${ctx.client.isRegistered}`,
+    );
 
     // Notify owner address that the bot is online once the agent is fully started.
     if (ownerAddress) {
