@@ -289,13 +289,28 @@ async function startAgent(privateKey, state, ownerAddress) {
   async function runFeedLoop() {
     log(`Starting feed loop. intervalMs=${FEED_INTERVAL_MS}`);
     let isFirstRun = true;
+    let consecutiveStops = 0;
+    const MAX_CONSECUTIVE_STOPS = 3;
 
     // Immediately check once on startup, then on interval.
     for (;;) {
       if (isStopped) {
-        log('Feed loop detected agent stop; exiting.');
+        consecutiveStops++;
+        log(`Feed loop detected agent stop (consecutive: ${consecutiveStops}); exiting.`);
+        
+        // If we've been stopped multiple times in a row, it might be a persistent issue
+        if (consecutiveStops >= MAX_CONSECUTIVE_STOPS) {
+          log(`WARNING: Agent has been stopped ${consecutiveStops} times consecutively.`);
+          log(`WARNING: This may indicate a persistent issue (e.g., decryption errors from uninitialized conversations).`);
+          log(`WARNING: The agent will restart and attempt to recover.`);
+        }
+        
         throw new Error('Agent stopped');
       }
+      
+      // Reset consecutive stops counter if we're running normally
+      consecutiveStops = 0;
+      
       try {
         await sendNewItemsToSubscriber(isFirstRun);
         isFirstRun = false;
@@ -642,12 +657,34 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   agent.on('unhandledError', (error) => {
     if (error instanceof AgentError) {
+      const errorCode = error.code;
+      const errorMessage = error.message;
+      const errorCause = error.cause ? String(error.cause) : '';
+      
       log(
-        `Unhandled AgentError (${error.code}): ${error.message}${
-          error.cause ? `; cause=${String(error.cause)}` : ''
+        `Unhandled AgentError (${errorCode}): ${errorMessage}${
+          errorCause ? `; cause=${errorCause}` : ''
         }`,
       );
       log(`Unhandled AgentError stack: ${error.stack || 'no stack trace'}`);
+      
+      // Handle specific error codes that shouldn't crash the agent
+      if (errorCode === 1002) {
+        // Error 1002: Conversation streaming error (often HPKE decryption failures)
+        // This can happen when receiving messages from uninitialized conversations
+        // or when encryption keys are out of sync. Don't crash - just log and continue.
+        log(`WARNING: Conversation streaming error (${errorCode}) - this is often due to decryption failures.`);
+        log(`WARNING: The agent will continue running. This may indicate an uninitialized conversation or encryption key mismatch.`);
+        log(`WARNING: If this persists, the sender may need to re-initialize the conversation by sending a new message.`);
+        return; // Don't let this error stop the agent
+      }
+      
+      // For other errors, log but don't necessarily crash
+      if (errorCause && errorCause.includes('Decryption failed')) {
+        log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
+        log(`WARNING: The agent will continue running. The sender may need to send a new message to re-initialize.`);
+        return; // Don't let decryption errors stop the agent
+      }
     } else {
       log(`Unhandled error: ${error.message}`);
       log(`Unhandled error stack: ${error.stack || 'no stack trace'}`);
@@ -783,7 +820,8 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   agent.on('stop', () => {
     isStopped = true;
-    log('Agent stopped.');
+    log('Agent stopped event received.');
+    log('WARNING: Agent stop may have been triggered by an error. Check logs above for details.');
   });
 
   log('Starting agent...');
