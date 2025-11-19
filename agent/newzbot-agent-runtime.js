@@ -145,10 +145,11 @@ async function startAgent(privateKey, state, ownerAddress) {
     try {
       log(`Creating DM conversation with address: ${state.subscriberAddress}`);
       const dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
-      log(`DM conversation created successfully. Conversation ID: ${dm.id}`);
+      log(`DM conversation created successfully. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
       
       const ctx = new ConversationContext({ conversation: dm, client: agent.client });
       log(`Conversation context created. Client address: ${agent.client.address || 'unknown'}`);
+      log(`Bot sending from address: ${wallet.address}, Client address: ${agent.client.address || 'unknown'}`);
 
       log(
         `Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress} in conversation ${dm.id}.`,
@@ -161,8 +162,14 @@ async function startAgent(privateKey, state, ownerAddress) {
         try {
           const text = formatNewsText(item);
           log(`Attempting to send message for item: ${item.title} (ID: ${item.id})`);
-          await ctx.sendText(text);
+          log(`Message text preview: ${text.substring(0, 100)}...`);
+          log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}, id: ${dm.id}`);
+          const messageResult = await ctx.sendText(text);
           log(`✓ Successfully sent item: ${item.title} (ID: ${item.id})`);
+          log(`✓ Message result: ${messageResult ? JSON.stringify(messageResult, Object.getOwnPropertyNames(messageResult)) : 'no result object'}`);
+          if (messageResult && messageResult.id) {
+            log(`✓ Message ID: ${messageResult.id}`);
+          }
           successCount++;
         } catch (err) {
           failCount++;
@@ -355,12 +362,41 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText(body);
   });
 
+  router.command('/test', async (ctx) => {
+    const sender = await ctx.getSenderAddress();
+    const convoId = ctx.conversation?.id || 'unknown';
+    log(`/test command received from ${sender || 'unknown'} in conversation ${convoId}`);
+    
+    try {
+      const testMessage = `Test message from bot ${agent.client.address || 'unknown'} at ${new Date().toISOString()}`;
+      log(`Sending test message: "${testMessage}"`);
+      log(`Conversation details - topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}, id: ${ctx.conversation.id || 'none'}`);
+      const result = await ctx.sendText(testMessage);
+      log(`✓ Test message sent successfully`);
+      log(`✓ Message result: ${result ? JSON.stringify(result, Object.getOwnPropertyNames(result)) : 'no result object'}`);
+      if (result && result.id) {
+        log(`✓ Test message ID: ${result.id}`);
+      }
+      await ctx.sendText(`Test message sent! Check your client to see if you received it. Bot address: ${agent.client.address || 'unknown'}`);
+    } catch (err) {
+      log(`✗ ERROR sending test message: ${err.message}`);
+      log(`✗ Error stack: ${err.stack}`);
+      log(`✗ Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
+      try {
+        await ctx.sendText(`Error sending test message: ${err.message}`);
+      } catch (sendErr) {
+        log(`✗ ERROR sending error response: ${sendErr.message}`);
+      }
+    }
+  });
+
   router.command('/help', async (ctx) => {
     const helpText =
       'newz.bot commands:\n' +
       '  /help               Show this help message\n' +
       '  /start              Subscribe this wallet to the feed\n' +
       '  /stop               Unsubscribe this wallet from the feed\n' +
+      '  /test               Send a test message to verify connectivity\n' +
       '  /reload             git pull + restart (owner only)\n' +
       '  /list               List configured RSS feeds\n' +
       '  /add <url>          Add a new RSS feed\n' +
@@ -518,10 +554,16 @@ async function startAgent(privateKey, state, ownerAddress) {
         try {
           log(`Attempting to send startup notification to owner at ${ownerAddress}...`);
           const dm = await agent.createDmWithAddress(validHex(ownerAddress));
-          log(`Created DM with owner. Conversation ID: ${dm.id}`);
+          log(`Created DM with owner. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
           const notifyCtx = new ConversationContext({ conversation: dm, client: agent.client });
-          await notifyCtx.sendText('news bot online');
+          const notificationText = `news bot online - address: ${agent.client.address || wallet.address}, env: ${XMTP_ENV}`;
+          log(`Sending startup notification: "${notificationText}"`);
+          const notifyResult = await notifyCtx.sendText(notificationText);
           log(`✓ Sent startup notification to owner at ${ownerAddress}.`);
+          log(`✓ Notification result: ${notifyResult ? JSON.stringify(notifyResult, Object.getOwnPropertyNames(notifyResult)) : 'no result object'}`);
+          if (notifyResult && notifyResult.id) {
+            log(`✓ Notification message ID: ${notifyResult.id}`);
+          }
         } catch (err) {
           log(`✗ ERROR: Failed to send startup notification: ${err.message}`);
           log(`✗ Startup notification error stack: ${err.stack}`);
