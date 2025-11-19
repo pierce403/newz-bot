@@ -744,114 +744,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`✓ Address consistency check passed: ${wallet.address} matches client address`);
     }
 
-    // Notify owner address that the bot is online once the agent is fully started.
-    if (ownerAddress) {
-      (async () => {
-        try {
-          log(`Attempting to send startup notification to owner at ${ownerAddress}...`);
-          
-          // Note: canMessage check removed - it's not critical and was causing API errors.
-          // Messages will be sent regardless, and any delivery issues will surface as send errors.
-          
-          const normalizedOwnerAddress = validHex(ownerAddress);
-          log(`Creating DM with owner - resolved ENS "${OWNER_NAME}" to address: ${ownerAddress}`);
-          log(`Normalized owner address (validHex): ${normalizedOwnerAddress}`);
-          log(`Address comparison - original: ${ownerAddress}, normalized: ${normalizedOwnerAddress}, match: ${ownerAddress.toLowerCase() === normalizedOwnerAddress.toLowerCase()}`);
-          
-          let dm = await agent.createDmWithAddress(normalizedOwnerAddress);
-          log(`Created DM with owner. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
-          log(`DM peerAddress comparison - expected: ${normalizedOwnerAddress.toLowerCase()}, got: ${dm.peerAddress ? dm.peerAddress.toLowerCase() : 'none'}, match: ${dm.peerAddress && dm.peerAddress.toLowerCase() === normalizedOwnerAddress.toLowerCase()}`);
-          
-          // If conversation is uninitialized, try to sync
-          if (!dm.topic || !dm.peerAddress) {
-            log(`WARNING: Owner conversation appears uninitialized, attempting sync...`);
-            try {
-              await agent.client.conversations.sync();
-              log(`Owner conversation sync completed`);
-              const conversations = await agent.client.conversations.list();
-              log(`Found ${conversations.length} total conversations after owner sync`);
-              
-              // Log details of all conversations for debugging
-              conversations.forEach((c, idx) => {
-                log(`Owner conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
-                log(`  Owner conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
-                // Try to serialize the whole object to see its structure
-                try {
-                  const serialized = JSON.stringify(c, (key, value) => {
-                    if (typeof value === 'object' && value !== null) {
-                      return Object.getOwnPropertyNames(value).reduce((acc, prop) => {
-                        try {
-                          acc[prop] = value[prop];
-                        } catch (e) {
-                          acc[prop] = '[unable to access]';
-                        }
-                        return acc;
-                      }, {});
-                    }
-                    return value;
-                  }, 2);
-                  log(`  Owner conversation ${idx} full structure: ${serialized}`);
-                } catch (serializeErr) {
-                  log(`  Owner conversation ${idx} serialization failed: ${serializeErr.message}`);
-                }
-                // Try accessing properties directly
-                log(`  Owner conversation ${idx} direct access - id: ${c.id}, topic: ${c.topic}, peerAddress: ${c.peerAddress}, peerAccountAddress: ${c.peerAccountAddress}`);
-              });
-              
-              // Try multiple ways to match the conversation
-              const ownerAddrLower = ownerAddress.toLowerCase();
-              let foundConvo = conversations.find(c => 
-                c.peerAddress && c.peerAddress.toLowerCase() === ownerAddrLower
-              );
-              
-              // If not found by peerAddress, try by peerAccountAddress
-              if (!foundConvo) {
-                foundConvo = conversations.find(c => 
-                  c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === ownerAddrLower
-                );
-              }
-              
-              // If still not found, try matching by conversation ID (if we created one)
-              if (!foundConvo && dm.id) {
-                foundConvo = conversations.find(c => c.id === dm.id);
-              }
-              
-              if (foundConvo) {
-                log(`Found owner conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, peerAccountAddress: ${foundConvo.peerAccountAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
-                if (foundConvo.topic && (foundConvo.peerAddress || foundConvo.peerAccountAddress)) {
-                  log(`Using synced owner conversation`);
-                  dm = foundConvo;
-                } else {
-                  log(`Synced owner conversation also uninitialized, keeping created conversation`);
-                }
-              } else {
-                log(`No owner conversation found after sync, using created conversation`);
-                log(`Available conversations: ${conversations.map(c => `${c.peerAddress || c.peerAccountAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
-              }
-            } catch (syncErr) {
-              log(`WARNING: Error syncing owner conversation: ${syncErr.message}`);
-              log(`WARNING: Sync error stack: ${syncErr.stack}`);
-            }
-          }
-          
-          const notifyCtx = new ConversationContext({ conversation: dm, client: agent.client });
-          const notificationText = `news bot online - address: ${agent.client.address || wallet.address}, env: ${XMTP_ENV}`;
-          log(`Sending startup notification: "${notificationText}"`);
-          const notifyResult = await notifyCtx.sendText(notificationText);
-          log(`✓ Sent startup notification to owner at ${ownerAddress}.`);
-          log(`✓ Notification result: ${notifyResult ? JSON.stringify(notifyResult, Object.getOwnPropertyNames(notifyResult)) : 'no result object'}`);
-          if (notifyResult && notifyResult.id) {
-            log(`✓ Notification message ID: ${notifyResult.id}`);
-          }
-        } catch (err) {
-          log(`✗ ERROR: Failed to send startup notification: ${err.message}`);
-          log(`✗ Startup notification error stack: ${err.stack}`);
-          log(`✗ Startup notification error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
-        }
-      })();
-    } else {
-      log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
-    }
+    // DISABLED: Startup notification causes HPKE decryption errors
+    // When the bot proactively creates a conversation with the owner on startup,
+    // it can cause welcome message decryption failures if the bot has multiple
+    // installations or if the timing is off. The owner can message the bot
+    // instead to establish the conversation.
+    log(`Startup notification disabled to prevent HPKE decryption errors.`);
+    log(`To communicate with the bot, send it a message - don't wait for startup notification.`);
   });
 
   agent.on('stop', () => {
