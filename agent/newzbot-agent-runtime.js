@@ -379,6 +379,22 @@ async function startAgent(privateKey, state, ownerAddress) {
   agent.on('start', (ctx) => {
     const addr = ctx.getClientAddress();
     log(`Agent online. Address: ${addr || 'unknown'}`);
+
+    // Notify owner address that the bot is online once the agent is fully started.
+    if (ownerAddress) {
+      (async () => {
+        try {
+          const dm = await agent.createDmWithAddress(validHex(ownerAddress));
+          const notifyCtx = new ConversationContext({ conversation: dm, client: agent.client });
+          await notifyCtx.sendText('news bot online');
+          log(`Sent startup notification to owner at ${ownerAddress}.`);
+        } catch (err) {
+          log(`Failed to send startup notification: ${err.message}`);
+        }
+      })();
+    } else {
+      log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
+    }
   });
 
   agent.on('stop', () => {
@@ -388,20 +404,6 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   await agent.start();
   log('Agent has started; entering feed loop.');
-
-  // Notify owner address that the bot is online.
-  if (ownerAddress) {
-    try {
-      const dm = await agent.createDmWithAddress(validHex(ownerAddress));
-      const ctx = new ConversationContext({ conversation: dm, client: agent.client });
-      await ctx.sendText('news bot online');
-      log(`Sent startup notification to owner at ${ownerAddress}.`);
-    } catch (err) {
-      log(`Failed to send startup notification: ${err.message}`);
-    }
-  } else {
-    log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
-  }
 
   await runFeedLoop();
 }
