@@ -24,6 +24,16 @@
 .DS_Store
 *.pem
 
+# local state
+newzbot.db
+newzbot.db-shm
+newzbot.db-wal
+newzbot-xmtp-*.db3
+newzbot-xmtp-*.db3-shm
+newzbot-xmtp-*.db3-wal
+newzbot.log
+newzbot.key
+
 # debug
 npm-debug.log*
 yarn-debug.log*
