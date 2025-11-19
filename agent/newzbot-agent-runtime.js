@@ -116,10 +116,44 @@ async function startAgent(privateKey, state, ownerAddress) {
     });
     log('XMTP agent created successfully');
 
-    // Check for multiple installations
-    // Note: Automatic revocation is currently disabled due to API limitations in the agent-sdk.
-    // To prevent HPKE decryption errors, ensure the database file is persisted across restarts.
-    log(`✓ Agent started. Ensure 'newzbot-xmtp-${XMTP_ENV}.db3' is persisted to maintain identity.`);
+    // Check for multiple installations and revoke old ones
+    // A bot should only have one active installation at a time to prevent HPKE decryption errors
+    try {
+      const currentInstallationIdBytes = agent.client.installationIdBytes;
+      log(`Current installation ID: ${agent.client.installationId}`);
+      
+      // Get all installations for this inbox
+      const inboxState = await agent.client.inboxState();
+      const installations = inboxState.installations;
+      log(`Total installations found: ${installations.length}`);
+      
+      // Revoke all installations except the current one
+      // IMPORTANT: revokeInstallations() expects Uint8Array[] (installation.bytes), NOT string[] (installation.id)
+      const installationsToRevoke = installations
+        .filter(installation => {
+          // Compare bytes arrays
+          if (installation.bytes.length !== currentInstallationIdBytes.length) return true;
+          for (let i = 0; i < installation.bytes.length; i++) {
+            if (installation.bytes[i] !== currentInstallationIdBytes[i]) return true;
+          }
+          return false;
+        })
+        .map(installation => installation.bytes);
+      
+      if (installationsToRevoke.length > 0) {
+        log(`Found ${installationsToRevoke.length} old installation(s) to revoke.`);
+        
+        await agent.client.revokeInstallations(installationsToRevoke);
+        log(`✓ Successfully revoked ${installationsToRevoke.length} old installation(s).`);
+        log(`✓ Only installation ${agent.client.installationId} should remain active.`);
+      } else {
+        log(`✓ No old installations to revoke. This is the only installation.`);
+      }
+    } catch (installErr) {
+      log(`WARNING: Error checking/revoking installations: ${installErr.message}`);
+      log(`WARNING: Stack: ${installErr.stack}`);
+      log(`WARNING: Multiple installations may cause HPKE decryption errors.`);
+    }
 
   } catch (err) {
     log(`ERROR: Failed to create XMTP agent: ${err.message}`);
@@ -128,8 +162,6 @@ async function startAgent(privateKey, state, ownerAddress) {
   }
 
   let isStopped = false;
-  let lastErrorWasHPKE = false;
-  let hpkeErrorCount = 0;
 
   async function sendNewItemsToSubscriber(isFirstRun) {
     const newItems = getUnsentItems(MAX_ITEMS_PER_TICK);
@@ -711,23 +743,10 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   agent.on('unhandledError', (error) => {
-    // Enhanced error logging for debugging HPKE issues
     if (error instanceof AgentError) {
       const errorCode = error.code;
       const errorMessage = error.message;
       const errorCause = error.cause ? String(error.cause) : '';
-
-      log(`[DEBUG] AgentError caught: Code=${errorCode}, Message="${errorMessage}"`);
-      if (error.cause) {
-        log(`[DEBUG] Cause: ${errorCause}`);
-        if (typeof error.cause === 'object') {
-          try {
-            log(`[DEBUG] Cause details: ${JSON.stringify(error.cause, Object.getOwnPropertyNames(error.cause))}`);
-          } catch (e) {
-            log(`[DEBUG] Could not serialize cause object`);
-          }
-        }
-      }
 
       log(
         `Unhandled AgentError (${errorCode}): ${errorMessage}${errorCause ? `; cause=${errorCause}` : ''
@@ -736,46 +755,19 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Unhandled AgentError stack: ${error.stack || 'no stack trace'}`);
 
       // Handle specific error codes that shouldn't crash the agent
-      if (errorCode === 1002) {
+      if (errorCode === 1002 || (errorCause && errorCause.includes('Decryption failed'))) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
-        lastErrorWasHPKE = true;
-        hpkeErrorCount++;
-
-        log(`WARNING: Conversation streaming error (${errorCode}) - HPKE decryption failure.`);
-        log(`[DEBUG] This error usually means the client sent a message encrypted for an old installation ID.`);
-        log(`[DEBUG] Current Installation ID: ${agent.client.installationId}`);
-        log(`[DEBUG] Current Inbox ID: ${agent.client.inboxId}`);
-        log(`[DEBUG] HPKE error count: ${hpkeErrorCount}`);
-
-        log(`WARNING: The agent SDK will handle retries. The user should send another message to complete initialization.`);
-        log(`*** ACTION REQUIRED: If you are the user, please SEND ANOTHER MESSAGE to the bot. ***`);
-        log(`*** The first message triggered a key exchange. The second message should decrypt successfully. ***`);
-
-        // IMPORTANT: We will ignore the subsequent 'stop' event if it's due to this HPKE error
-        // The agent will NOT actually stop - we'll keep it running
+        log(`WARNING: Conversation streaming error - HPKE decryption failure.`);
+        log(`WARNING: This should not happen if installations are properly managed.`);
+        log(`WARNING: Current Installation ID: ${agent.client.installationId}`);
+        log(`WARNING: The agent will continue running. The sender may need to send another message.`);
+        // Don't crash the agent - let it continue
         return;
       }
-
-      // For other errors, log but don't necessarily crash
-      if (errorCause && errorCause.includes('Decryption failed')) {
-        lastErrorWasHPKE = true;
-        hpkeErrorCount++;
-
-        log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
-        log(`WARNING: The agent will continue running. The sender may need to send a new message to re-initialize.`);
-        log(`*** ACTION REQUIRED: Please SEND ANOTHER MESSAGE to the bot. ***`);
-        log(`[DEBUG] HPKE error count: ${hpkeErrorCount}`);
-        return;
-      }
-
-      // If it's not an HPKE error, clear the flag
-      lastErrorWasHPKE = false;
     } else {
-      log(`[DEBUG] Non-Agent Error caught: ${error.constructor.name}`);
       log(`Unhandled error: ${error.message}`);
       log(`Unhandled error stack: ${error.stack || 'no stack trace'}`);
       log(`Unhandled error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`);
-      lastErrorWasHPKE = false;
     }
   });
 
@@ -820,27 +812,6 @@ async function startAgent(privateKey, state, ownerAddress) {
   });
 
   agent.on('stop', () => {
-    log('[DEBUG] Agent stop event received.');
-
-    // If the stop was caused by an HPKE error, we should ignore it and keep running
-    if (lastErrorWasHPKE) {
-      log('[DEBUG] Stop event was triggered by HPKE error - IGNORING stop and keeping agent running.');
-      log('[DEBUG] The agent will continue to process messages. The next message from the user should work.');
-
-      // Reset the HPKE flag after a short delay to allow for recovery
-      setTimeout(() => {
-        if (lastErrorWasHPKE) {
-          log('[DEBUG] Resetting HPKE error flag after timeout.');
-          lastErrorWasHPKE = false;
-        }
-      }, 30000); // 30 seconds
-
-      // DO NOT set isStopped = true
-      // The agent should keep running
-      return;
-    }
-
-    // For non-HPKE stops, actually stop the agent
     isStopped = true;
     log('Agent stopped event received.');
     log('WARNING: Agent stop may have been triggered by an error. Check logs above for details.');
