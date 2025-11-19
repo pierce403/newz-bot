@@ -144,8 +144,52 @@ async function startAgent(privateKey, state, ownerAddress) {
 
     try {
       log(`Creating DM conversation with address: ${state.subscriberAddress}`);
-      const dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
-      log(`DM conversation created successfully. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
+      
+      // Check if recipient can receive messages
+      try {
+        const canMessage = await agent.client.canMessage(validHex(state.subscriberAddress));
+        log(`Can message check for ${state.subscriberAddress}: ${canMessage}`);
+        if (!canMessage) {
+          log(`WARNING: Cannot message ${state.subscriberAddress} - they may not have XMTP enabled or may have blocked this address`);
+        }
+      } catch (canMsgErr) {
+        log(`WARNING: Error checking canMessage: ${canMsgErr.message}`);
+      }
+      
+      let dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
+      log(`DM conversation created. Conversation ID: ${dm.id}`);
+      log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
+      log(`Conversation properties: ${JSON.stringify(Object.keys(dm))}`);
+      
+      // Check if conversation needs initialization
+      if (!dm.topic || !dm.peerAddress) {
+        log(`WARNING: Conversation appears uninitialized (topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'})`);
+        log(`Attempting to sync conversations...`);
+        try {
+          // Try to sync the conversation
+          await agent.client.conversations.sync();
+          log(`Conversation sync completed`);
+          
+          // Re-fetch the conversation to see if it's now initialized
+          const conversations = await agent.client.conversations.list();
+          const foundConvo = conversations.find(c => 
+            c.peerAddress && c.peerAddress.toLowerCase() === state.subscriberAddress.toLowerCase()
+          );
+          if (foundConvo) {
+            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}`);
+            // Use the found conversation if it's better initialized
+            if (foundConvo.topic && foundConvo.peerAddress) {
+              log(`Using synced conversation instead (better initialized)`);
+              dm = foundConvo;
+            }
+          } else {
+            log(`No existing conversation found after sync, using created conversation`);
+          }
+        } catch (syncErr) {
+          log(`WARNING: Error syncing conversations: ${syncErr.message}`);
+          log(`Will proceed with created conversation despite sync error`);
+        }
+      }
       
       const ctx = new ConversationContext({ conversation: dm, client: agent.client });
       log(`Conversation context created. Client address: ${agent.client.address || 'unknown'}`);
@@ -366,17 +410,53 @@ async function startAgent(privateKey, state, ownerAddress) {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation?.id || 'unknown';
     log(`/test command received from ${sender || 'unknown'} in conversation ${convoId}`);
+    log(`Conversation details - topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}, id: ${ctx.conversation.id || 'none'}`);
     
     try {
+      // First, try to create a new conversation to test initialization
+      log(`Testing conversation creation with ${sender}...`);
+      let testDm;
+      try {
+        testDm = await agent.createDmWithAddress(validHex(sender));
+        log(`Created test DM - topic: ${testDm.topic || 'none'}, peerAddress: ${testDm.peerAddress || 'none'}, id: ${testDm.id}`);
+        
+        // Check if conversation is initialized
+        if (!testDm.topic || !testDm.peerAddress) {
+          log(`WARNING: Test conversation appears uninitialized`);
+          await agent.client.conversations.sync();
+          const conversations = await agent.client.conversations.list();
+          const foundConvo = conversations.find(c => 
+            c.peerAddress && c.peerAddress.toLowerCase() === sender.toLowerCase()
+          );
+          if (foundConvo) {
+            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}`);
+            testDm = foundConvo;
+          }
+        }
+      } catch (createErr) {
+        log(`Error creating test DM: ${createErr.message}`);
+        testDm = ctx.conversation; // Fall back to existing conversation
+      }
+      
       const testMessage = `Test message from bot ${agent.client.address || 'unknown'} at ${new Date().toISOString()}`;
       log(`Sending test message: "${testMessage}"`);
-      log(`Conversation details - topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}, id: ${ctx.conversation.id || 'none'}`);
-      const result = await ctx.sendText(testMessage);
-      log(`✓ Test message sent successfully`);
+      
+      // Use the test conversation if we created one, otherwise use the existing context
+      let result;
+      if (testDm && testDm !== ctx.conversation) {
+        const testCtx = new ConversationContext({ conversation: testDm, client: agent.client });
+        result = await testCtx.sendText(testMessage);
+        log(`✓ Test message sent via new conversation`);
+      } else {
+        result = await ctx.sendText(testMessage);
+        log(`✓ Test message sent via existing conversation`);
+      }
+      
       log(`✓ Message result: ${result ? JSON.stringify(result, Object.getOwnPropertyNames(result)) : 'no result object'}`);
       if (result && result.id) {
         log(`✓ Test message ID: ${result.id}`);
       }
+      
       await ctx.sendText(`Test message sent! Check your client to see if you received it. Bot address: ${agent.client.address || 'unknown'}`);
     } catch (err) {
       log(`✗ ERROR sending test message: ${err.message}`);
@@ -553,8 +633,39 @@ async function startAgent(privateKey, state, ownerAddress) {
       (async () => {
         try {
           log(`Attempting to send startup notification to owner at ${ownerAddress}...`);
-          const dm = await agent.createDmWithAddress(validHex(ownerAddress));
+          
+          // Check if owner can receive messages
+          try {
+            const canMessage = await agent.client.canMessage(validHex(ownerAddress));
+            log(`Can message check for owner: ${canMessage}`);
+            if (!canMessage) {
+              log(`WARNING: Cannot message owner - they may not have XMTP enabled`);
+            }
+          } catch (canMsgErr) {
+            log(`WARNING: Error checking canMessage for owner: ${canMsgErr.message}`);
+          }
+          
+          let dm = await agent.createDmWithAddress(validHex(ownerAddress));
           log(`Created DM with owner. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
+          
+          // If conversation is uninitialized, try to sync
+          if (!dm.topic || !dm.peerAddress) {
+            log(`WARNING: Owner conversation appears uninitialized, attempting sync...`);
+            try {
+              await agent.client.conversations.sync();
+              const conversations = await agent.client.conversations.list();
+              const foundConvo = conversations.find(c => 
+                c.peerAddress && c.peerAddress.toLowerCase() === ownerAddress.toLowerCase()
+              );
+              if (foundConvo && foundConvo.topic && foundConvo.peerAddress) {
+                log(`Using synced owner conversation`);
+                dm = foundConvo;
+              }
+            } catch (syncErr) {
+              log(`WARNING: Error syncing owner conversation: ${syncErr.message}`);
+            }
+          }
+          
           const notifyCtx = new ConversationContext({ conversation: dm, client: agent.client });
           const notificationText = `news bot online - address: ${agent.client.address || wallet.address}, env: ${XMTP_ENV}`;
           log(`Sending startup notification: "${notificationText}"`);
