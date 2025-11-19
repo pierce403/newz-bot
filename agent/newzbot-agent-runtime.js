@@ -326,20 +326,36 @@ async function startAgent(privateKey, state, ownerAddress) {
     for (; ;) {
       if (isStopped) {
         consecutiveStops++;
-        log(`Feed loop detected agent stop (consecutive: ${consecutiveStops}); exiting.`);
+        log(`Feed loop detected agent stop (consecutive: ${consecutiveStops}). Attempting to restart agent...`);
 
-        // If we've been stopped multiple times in a row, it might be a persistent issue
+        // If we've been stopped multiple times in a row rapidly, wait a bit longer
         if (consecutiveStops >= MAX_CONSECUTIVE_STOPS) {
           log(`WARNING: Agent has been stopped ${consecutiveStops} times consecutively.`);
-          log(`WARNING: This may indicate a persistent issue (e.g., decryption errors from uninitialized conversations).`);
-          log(`WARNING: The agent will restart and attempt to recover.`);
+          log(`WARNING: Waiting 10 seconds before next restart attempt...`);
+          await new Promise((resolve) => setTimeout(resolve, 10000));
         }
 
-        throw new Error('Agent stopped');
+        try {
+          await agent.start();
+          isStopped = false;
+          log('✓ Agent restarted successfully.');
+
+          // If we successfully restarted, we can reset the counter after a successful run period
+          // But for now, let's just continue. The counter will be reset if we hit the else block below.
+        } catch (restartErr) {
+          log(`✗ Failed to restart agent: ${restartErr.message}`);
+          // Wait a bit before retrying
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+
+        // Skip the rest of the loop and check isStopped again
+        continue;
       }
 
-      // Reset consecutive stops counter if we're running normally
-      consecutiveStops = 0;
+      // If we are running normally (not stopped), reset consecutive stops
+      if (consecutiveStops > 0) {
+        consecutiveStops = 0;
+      }
 
       try {
         await sendNewItemsToSubscriber(isFirstRun);
@@ -716,6 +732,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         log(`WARNING: This often happens when a user initiates a conversation before it's fully initialized.`);
         log(`WARNING: The agent SDK will handle retries. The user should send another message to complete initialization.`);
         log(`WARNING: The agent will continue running and should recover automatically.`);
+        log(`*** ACTION REQUIRED: If you are the user, please SEND ANOTHER MESSAGE to the bot. The first one triggered the key update. ***`);
         // Don't return - let the SDK handle the error, but don't crash the agent
         // The SDK will stop the agent, but our retry loop will restart it
       }
@@ -724,6 +741,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       if (errorCause && errorCause.includes('Decryption failed')) {
         log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
         log(`WARNING: The agent will continue running. The sender may need to send a new message to re-initialize.`);
+        log(`*** ACTION REQUIRED: Please SEND ANOTHER MESSAGE to the bot. ***`);
         // Don't return - let the SDK handle it
       }
     } else {
