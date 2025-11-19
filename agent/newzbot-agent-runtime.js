@@ -313,18 +313,10 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   router.command('/reload', async (ctx) => {
     const sender = await ctx.getSenderAddress();
-    if (!ownerAddress) {
-      await ctx.sendText('Owner address is not configured; reload is disabled.');
-      return;
-    }
-
-    if (!sender || sender.toLowerCase() !== ownerAddress.toLowerCase()) {
-      await ctx.sendText('Unauthorized: only the owner can reload the bot.');
-      return;
-    }
-
+    log(`/reload command received from ${sender || 'unknown'}`);
+    
     await ctx.sendText('Reloading newz.bot from git and restarting…');
-    log(`/reload requested by owner ${sender}; running git pull.`);
+    log(`/reload requested by ${sender || 'unknown'}; running git pull.`);
 
     // Lazy-load child_process to avoid paying the cost on normal startup.
     // eslint-disable-next-line global-require
@@ -521,7 +513,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       '  /start              Subscribe this wallet to the feed\n' +
       '  /stop               Unsubscribe this wallet from the feed\n' +
       '  /test               Send a test message to verify connectivity\n' +
-      '  /reload             git pull + restart (owner only)\n' +
+      '  /reload             git pull + restart\n' +
       '  /list               List configured RSS feeds\n' +
       '  /add <url>          Add a new RSS feed\n' +
       '  /remove <id>        Remove a feed by id (see /list)\n' +
