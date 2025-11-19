@@ -51,6 +51,7 @@ function loadState() {
     const parsed = JSON.parse(raw);
     return {
       subscriberAddress: parsed.subscriberAddress,
+      ownerHasContacted: Boolean(parsed.ownerHasContacted),
     };
   } catch (err) {
     log(`Failed to load state, starting fresh: ${err.message}`);
@@ -366,6 +367,14 @@ async function startAgent(privateKey, state, ownerAddress) {
   agent.on('text', async (ctx) => {
     const sender = await ctx.getSenderAddress();
     log(`Received text from ${sender || 'unknown'}: ${ctx.message.content}`);
+
+     if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
+       if (!state.ownerHasContacted) {
+         state.ownerHasContacted = true;
+         saveState(state);
+         log('Owner has contacted the bot; startup notifications will be sent on future restarts.');
+       }
+     }
   });
 
   agent.on('unhandledError', (error) => {
@@ -381,7 +390,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(`Agent online. Address: ${addr || 'unknown'}`);
 
     // Notify owner address that the bot is online once the agent is fully started.
-    if (ownerAddress) {
+    if (ownerAddress && state.ownerHasContacted) {
       (async () => {
         try {
           const dm = await agent.createDmWithAddress(validHex(ownerAddress));
@@ -393,7 +402,11 @@ async function startAgent(privateKey, state, ownerAddress) {
         }
       })();
     } else {
-      log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
+      if (!ownerAddress) {
+        log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
+      } else if (!state.ownerHasContacted) {
+        log('Owner has not contacted the bot yet; skipping startup notification.');
+      }
     }
   });
 
