@@ -152,8 +152,32 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Creating DM with subscriber - address: ${state.subscriberAddress}`);
       log(`Normalized subscriber address (validHex): ${normalizedSubscriberAddress}`);
       
-      let dm = await agent.createDmWithAddress(normalizedSubscriberAddress);
-      log(`DM conversation created. Conversation ID: ${dm.id}`);
+      // Try to get existing conversation first, or create if needed
+      // Note: createDmWithAddress will create a conversation, but it may not be fully initialized
+      // until the first message is exchanged. We'll handle errors gracefully.
+      let dm;
+      try {
+        // First, try to find existing conversation
+        const conversations = await agent.client.conversations.list();
+        const existingConvo = conversations.find(c => 
+          (c.peerAddress && c.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()) ||
+          (c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase())
+        );
+        
+        if (existingConvo && existingConvo.topic) {
+          log(`Found existing conversation for subscriber: ${existingConvo.id}`);
+          dm = existingConvo;
+        } else {
+          log(`No existing conversation found, creating new DM with address: ${normalizedSubscriberAddress}`);
+          dm = await agent.createDmWithAddress(normalizedSubscriberAddress);
+          log(`DM conversation created. Conversation ID: ${dm.id}`);
+        }
+      } catch (createErr) {
+        log(`ERROR creating conversation: ${createErr.message}`);
+        log(`ERROR: This may happen if the conversation isn't ready yet. Will retry on next feed loop.`);
+        throw createErr;
+      }
+      
       log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
       log(`DM peerAddress comparison - expected: ${normalizedSubscriberAddress.toLowerCase()}, got: ${dm.peerAddress ? dm.peerAddress.toLowerCase() : 'none'}, match: ${dm.peerAddress && dm.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()}`);
       log(`Conversation properties: ${JSON.stringify(Object.keys(dm))}`);
@@ -655,6 +679,13 @@ async function startAgent(privateKey, state, ownerAddress) {
     }
   });
 
+  // Handle conversation events - this is fired when a new conversation is created
+  // This helps us track when conversations are properly initialized
+  agent.on('conversation', async (conversation) => {
+    log(`New conversation event received - id: ${conversation.id || 'none'}, topic: ${conversation.topic || 'none'}, peerAddress: ${conversation.peerAddress || 'none'}`);
+    log(`Conversation properties: ${JSON.stringify(Object.keys(conversation))}`);
+  });
+
   agent.on('unhandledError', (error) => {
     if (error instanceof AgentError) {
       const errorCode = error.code;
@@ -671,19 +702,24 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Handle specific error codes that shouldn't crash the agent
       if (errorCode === 1002) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
-        // This can happen when receiving messages from uninitialized conversations
-        // or when encryption keys are out of sync. Don't crash - just log and continue.
-        log(`WARNING: Conversation streaming error (${errorCode}) - this is often due to decryption failures.`);
-        log(`WARNING: The agent will continue running. This may indicate an uninitialized conversation or encryption key mismatch.`);
-        log(`WARNING: If this persists, the sender may need to re-initialize the conversation by sending a new message.`);
-        return; // Don't let this error stop the agent
+        // This can happen when:
+        // 1. A user tries to message the bot before the conversation is fully initialized
+        // 2. Encryption keys are out of sync
+        // 3. Welcome messages can't be decrypted
+        // The agent SDK will handle retrying, so we should log but not crash
+        log(`WARNING: Conversation streaming error (${errorCode}) - HPKE decryption failure.`);
+        log(`WARNING: This often happens when a user initiates a conversation before it's fully initialized.`);
+        log(`WARNING: The agent SDK will handle retries. The user should send another message to complete initialization.`);
+        log(`WARNING: The agent will continue running and should recover automatically.`);
+        // Don't return - let the SDK handle the error, but don't crash the agent
+        // The SDK will stop the agent, but our retry loop will restart it
       }
       
       // For other errors, log but don't necessarily crash
       if (errorCause && errorCause.includes('Decryption failed')) {
         log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
         log(`WARNING: The agent will continue running. The sender may need to send a new message to re-initialize.`);
-        return; // Don't let decryption errors stop the agent
+        // Don't return - let the SDK handle it
       }
     } else {
       log(`Unhandled error: ${error.message}`);
