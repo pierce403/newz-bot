@@ -115,37 +115,12 @@ async function startAgent(privateKey, state, ownerAddress) {
       dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
     });
     log('XMTP agent created successfully');
-    
-    // Check for multiple installations and revoke old ones
-    // A bot should only have one active installation at a time
-    try {
-      const currentInstallationId = agent.client.installationId;
-      log(`Current installation ID: ${currentInstallationId}`);
-      
-      // Get all installations for this inbox
-      const inboxState = await agent.client.inboxState();
-      const installations = inboxState.installations;
-      log(`Total installations found: ${installations.length}`);
-      
-      // Revoke all installations except the current one
-      const installationsToRevoke = installations
-        .filter(installation => installation.id !== currentInstallationId)
-        .map(installation => installation.id);
-      
-      if (installationsToRevoke.length > 0) {
-        log(`Found ${installationsToRevoke.length} old installation(s) to revoke: ${installationsToRevoke.join(', ')}`);
-        
-        await agent.client.revokeInstallations(installationsToRevoke);
-        log(`✓ Successfully revoked ${installationsToRevoke.length} old installation(s).`);
-        log(`✓ Only installation ${currentInstallationId} should remain active.`);
-      } else {
-        log(`✓ No old installations to revoke. This is the only installation.`);
-      }
-    } catch (installErr) {
-      log(`WARNING: Error checking/revoking installations: ${installErr.message}`);
-      log(`WARNING: Stack: ${installErr.stack}`);
-      log(`WARNING: Multiple installations may cause HPKE decryption errors.`);
-    }
+
+    // Check for multiple installations
+    // Note: Automatic revocation is currently disabled due to API limitations in the agent-sdk.
+    // To prevent HPKE decryption errors, ensure the database file is persisted across restarts.
+    log(`✓ Agent started. Ensure 'newzbot-xmtp-${XMTP_ENV}.db3' is persisted to maintain identity.`);
+
   } catch (err) {
     log(`ERROR: Failed to create XMTP agent: ${err.message}`);
     log(`ERROR: Stack trace: ${err.stack}`);
@@ -175,14 +150,14 @@ async function startAgent(privateKey, state, ownerAddress) {
 
     try {
       log(`Creating DM conversation with address: ${state.subscriberAddress}`);
-      
+
       // Note: canMessage check removed - it's not critical and was causing API errors.
       // Messages will be sent regardless, and any delivery issues will surface as send errors.
-      
+
       const normalizedSubscriberAddress = validHex(state.subscriberAddress);
       log(`Creating DM with subscriber - address: ${state.subscriberAddress}`);
       log(`Normalized subscriber address (validHex): ${normalizedSubscriberAddress}`);
-      
+
       // Try to get existing conversation first, or create if needed
       // Note: createDmWithAddress will create a conversation, but it may not be fully initialized
       // until the first message is exchanged. We'll handle errors gracefully.
@@ -190,11 +165,11 @@ async function startAgent(privateKey, state, ownerAddress) {
       try {
         // First, try to find existing conversation
         const conversations = await agent.client.conversations.list();
-        const existingConvo = conversations.find(c => 
+        const existingConvo = conversations.find(c =>
           (c.peerAddress && c.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()) ||
           (c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase())
         );
-        
+
         if (existingConvo && existingConvo.topic) {
           log(`Found existing conversation for subscriber: ${existingConvo.id}`);
           dm = existingConvo;
@@ -208,11 +183,11 @@ async function startAgent(privateKey, state, ownerAddress) {
         log(`ERROR: This may happen if the conversation isn't ready yet. Will retry on next feed loop.`);
         throw createErr;
       }
-      
+
       log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
       log(`DM peerAddress comparison - expected: ${normalizedSubscriberAddress.toLowerCase()}, got: ${dm.peerAddress ? dm.peerAddress.toLowerCase() : 'none'}, match: ${dm.peerAddress && dm.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()}`);
       log(`Conversation properties: ${JSON.stringify(Object.keys(dm))}`);
-      
+
       // Check if conversation needs initialization
       if (!dm.topic || !dm.peerAddress) {
         log(`WARNING: Conversation appears uninitialized (topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'})`);
@@ -221,11 +196,11 @@ async function startAgent(privateKey, state, ownerAddress) {
           // Try to sync the conversation
           await agent.client.conversations.sync();
           log(`Conversation sync completed`);
-          
+
           // Re-fetch the conversation to see if it's now initialized
           const conversations = await agent.client.conversations.list();
           log(`Found ${conversations.length} total conversations after sync`);
-          
+
           // Log details of all conversations for debugging
           conversations.forEach((c, idx) => {
             log(`Conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
@@ -252,25 +227,25 @@ async function startAgent(privateKey, state, ownerAddress) {
             // Try accessing properties directly
             log(`  Conversation ${idx} direct access - id: ${c.id}, topic: ${c.topic}, peerAddress: ${c.peerAddress}, peerAccountAddress: ${c.peerAccountAddress}`);
           });
-          
+
           // Try multiple ways to match the conversation
           const targetAddrLower = state.subscriberAddress.toLowerCase();
-          let foundConvo = conversations.find(c => 
+          let foundConvo = conversations.find(c =>
             c.peerAddress && c.peerAddress.toLowerCase() === targetAddrLower
           );
-          
+
           // If not found by peerAddress, try by peerAccountAddress
           if (!foundConvo) {
-            foundConvo = conversations.find(c => 
+            foundConvo = conversations.find(c =>
               c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === targetAddrLower
             );
           }
-          
+
           // If still not found, try matching by conversation ID (if we created one)
           if (!foundConvo && dm.id) {
             foundConvo = conversations.find(c => c.id === dm.id);
           }
-          
+
           if (foundConvo) {
             log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, peerAccountAddress: ${foundConvo.peerAccountAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
             // Use the found conversation if it's better initialized
@@ -289,7 +264,7 @@ async function startAgent(privateKey, state, ownerAddress) {
           log(`Will proceed with created conversation despite sync error`);
         }
       }
-      
+
       const ctx = new ConversationContext({ conversation: dm, client: agent.client });
       log(`Conversation context created. Client address: ${agent.client.address || 'unknown'}`);
       log(`Bot sending from address: ${wallet.address}, Client address: ${agent.client.address || 'unknown'}`);
@@ -348,24 +323,24 @@ async function startAgent(privateKey, state, ownerAddress) {
     const MAX_CONSECUTIVE_STOPS = 3;
 
     // Immediately check once on startup, then on interval.
-    for (;;) {
+    for (; ;) {
       if (isStopped) {
         consecutiveStops++;
         log(`Feed loop detected agent stop (consecutive: ${consecutiveStops}); exiting.`);
-        
+
         // If we've been stopped multiple times in a row, it might be a persistent issue
         if (consecutiveStops >= MAX_CONSECUTIVE_STOPS) {
           log(`WARNING: Agent has been stopped ${consecutiveStops} times consecutively.`);
           log(`WARNING: This may indicate a persistent issue (e.g., decryption errors from uninitialized conversations).`);
           log(`WARNING: The agent will restart and attempt to recover.`);
         }
-        
+
         throw new Error('Agent stopped');
       }
-      
+
       // Reset consecutive stops counter if we're running normally
       consecutiveStops = 0;
-      
+
       try {
         await sendNewItemsToSubscriber(isFirstRun);
         isFirstRun = false;
@@ -384,7 +359,7 @@ async function startAgent(privateKey, state, ownerAddress) {
   router.command('/reload', async (ctx) => {
     const sender = await ctx.getSenderAddress();
     log(`/reload command received from ${sender || 'unknown'}`);
-    
+
     await ctx.sendText('Reloading newz.bot from git and restarting…');
     log(`/reload requested by ${sender || 'unknown'}; running git pull.`);
 
@@ -448,7 +423,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     const raw = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
     const trimmed = raw.trim();
     log(`/add command received from ${sender || 'unknown'}: "${trimmed}"`);
-    
+
     if (!trimmed) {
       try {
         await ctx.sendText('Usage: /add <feed-url>');
@@ -517,7 +492,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     const convoId = ctx.conversation?.id || 'unknown';
     log(`/test command received from ${sender || 'unknown'} in conversation ${convoId}`);
     log(`Conversation details - topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}, id: ${ctx.conversation.id || 'none'}`);
-    
+
     try {
       // First, try to create a new conversation to test initialization
       log(`Testing conversation creation with ${sender}...`);
@@ -525,13 +500,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       try {
         testDm = await agent.createDmWithAddress(validHex(sender));
         log(`Created test DM - topic: ${testDm.topic || 'none'}, peerAddress: ${testDm.peerAddress || 'none'}, id: ${testDm.id}`);
-        
+
         // Check if conversation is initialized
         if (!testDm.topic || !testDm.peerAddress) {
           log(`WARNING: Test conversation appears uninitialized`);
           await agent.client.conversations.sync();
           const conversations = await agent.client.conversations.list();
-          const foundConvo = conversations.find(c => 
+          const foundConvo = conversations.find(c =>
             c.peerAddress && c.peerAddress.toLowerCase() === sender.toLowerCase()
           );
           if (foundConvo) {
@@ -543,10 +518,10 @@ async function startAgent(privateKey, state, ownerAddress) {
         log(`Error creating test DM: ${createErr.message}`);
         testDm = ctx.conversation; // Fall back to existing conversation
       }
-      
+
       const testMessage = `Test message from bot ${agent.client.address || 'unknown'} at ${new Date().toISOString()}`;
       log(`Sending test message: "${testMessage}"`);
-      
+
       // Use the test conversation if we created one, otherwise use the existing context
       let result;
       if (testDm && testDm !== ctx.conversation) {
@@ -557,12 +532,12 @@ async function startAgent(privateKey, state, ownerAddress) {
         result = await ctx.sendText(testMessage);
         log(`✓ Test message sent via existing conversation`);
       }
-      
+
       log(`✓ Message result: ${result ? JSON.stringify(result, Object.getOwnPropertyNames(result)) : 'no result object'}`);
       if (result && result.id) {
         log(`✓ Test message ID: ${result.id}`);
       }
-      
+
       await ctx.sendText(`Test message sent! Check your client to see if you received it. Bot address: ${agent.client.address || 'unknown'}`);
     } catch (err) {
       log(`✗ ERROR sending test message: ${err.message}`);
@@ -623,7 +598,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation?.id || 'unknown';
     log(`/start command received from ${sender || 'unknown'} in conversation ${convoId}`);
-    
+
     if (!sender) {
       log(`WARNING: /start command but unable to determine sender address`);
       await ctx.sendText("Hi, I can't do anything yet.");
@@ -694,7 +669,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     );
     log(`Message details - conversation topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}`);
     log(`Sender address details - raw: ${sender || 'none'}, normalized: ${sender ? validHex(sender) : 'none'}`);
-    
+
     if (ownerAddress) {
       const normalizedSender = sender ? validHex(sender) : null;
       const normalizedOwner = validHex(ownerAddress);
@@ -722,14 +697,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       const errorCode = error.code;
       const errorMessage = error.message;
       const errorCause = error.cause ? String(error.cause) : '';
-      
+
       log(
-        `Unhandled AgentError (${errorCode}): ${errorMessage}${
-          errorCause ? `; cause=${errorCause}` : ''
+        `Unhandled AgentError (${errorCode}): ${errorMessage}${errorCause ? `; cause=${errorCause}` : ''
         }`,
       );
       log(`Unhandled AgentError stack: ${error.stack || 'no stack trace'}`);
-      
+
       // Handle specific error codes that shouldn't crash the agent
       if (errorCode === 1002) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
@@ -745,7 +719,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         // Don't return - let the SDK handle the error, but don't crash the agent
         // The SDK will stop the agent, but our retry loop will restart it
       }
-      
+
       // For other errors, log but don't necessarily crash
       if (errorCause && errorCause.includes('Decryption failed')) {
         log(`WARNING: HPKE decryption failed - this is often due to uninitialized conversations.`);
@@ -775,13 +749,28 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`✓ Address consistency check passed: ${wallet.address} matches client address`);
     }
 
-    // DISABLED: Startup notification causes HPKE decryption errors
-    // When the bot proactively creates a conversation with the owner on startup,
-    // it can cause welcome message decryption failures if the bot has multiple
-    // installations or if the timing is off. The owner can message the bot
-    // instead to establish the conversation.
-    log(`Startup notification disabled to prevent HPKE decryption errors.`);
-    log(`To communicate with the bot, send it a message - don't wait for startup notification.`);
+    // Startup notification:
+    // We send a message on startup to ensure the subscriber's client updates its contact bundle
+    // for this installation. This helps prevent HPKE decryption errors on subsequent messages.
+    if (state.subscriberAddress) {
+      const normalizedSubscriber = validHex(state.subscriberAddress);
+      log(`Sending startup notification to ${normalizedSubscriber}...`);
+
+      // Use an async IIFE to not block the event handler
+      (async () => {
+        try {
+          const dm = await agent.createDmWithAddress(normalizedSubscriber);
+          const ctx = new ConversationContext({ conversation: dm, client: agent.client });
+          await ctx.sendText("Bot online. Connection established.");
+          log("✓ Startup notification sent.");
+        } catch (err) {
+          log(`WARNING: Failed to send startup notification: ${err.message}`);
+          // Ignore errors - this is a best-effort attempt to sync
+        }
+      })();
+    } else {
+      log(`No subscriber registered; skipping startup notification.`);
+    }
   });
 
   agent.on('stop', () => {
@@ -821,7 +810,7 @@ async function main() {
   const privateKey = ensureKeypair();
   const state = loadState();
   log(`Loaded state - subscriberAddress: ${state.subscriberAddress || 'none'}`);
-  
+
   let ownerAddress = null;
 
   try {
