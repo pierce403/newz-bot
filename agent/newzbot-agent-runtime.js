@@ -148,9 +148,14 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Note: canMessage check removed - it's not critical and was causing API errors.
       // Messages will be sent regardless, and any delivery issues will surface as send errors.
       
-      let dm = await agent.createDmWithAddress(validHex(state.subscriberAddress));
+      const normalizedSubscriberAddress = validHex(state.subscriberAddress);
+      log(`Creating DM with subscriber - address: ${state.subscriberAddress}`);
+      log(`Normalized subscriber address (validHex): ${normalizedSubscriberAddress}`);
+      
+      let dm = await agent.createDmWithAddress(normalizedSubscriberAddress);
       log(`DM conversation created. Conversation ID: ${dm.id}`);
       log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
+      log(`DM peerAddress comparison - expected: ${normalizedSubscriberAddress.toLowerCase()}, got: ${dm.peerAddress ? dm.peerAddress.toLowerCase() : 'none'}, match: ${dm.peerAddress && dm.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()}`);
       log(`Conversation properties: ${JSON.stringify(Object.keys(dm))}`);
       
       // Check if conversation needs initialization
@@ -626,6 +631,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       `Received text from ${sender || 'unknown'} in conversation ${convoId}, msg ${msgId}: ${content}`,
     );
     log(`Message details - conversation topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}`);
+    log(`Sender address details - raw: ${sender || 'none'}, normalized: ${sender ? validHex(sender) : 'none'}`);
+    
+    if (ownerAddress) {
+      const normalizedSender = sender ? validHex(sender) : null;
+      const normalizedOwner = validHex(ownerAddress);
+      log(`Address comparison - sender normalized: ${normalizedSender || 'none'}, owner normalized: ${normalizedOwner}, match: ${normalizedSender && normalizedSender.toLowerCase() === normalizedOwner.toLowerCase()}`);
+    }
 
     if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
       if (!state.ownerHasContacted) {
@@ -676,8 +688,14 @@ async function startAgent(privateKey, state, ownerAddress) {
           // Note: canMessage check removed - it's not critical and was causing API errors.
           // Messages will be sent regardless, and any delivery issues will surface as send errors.
           
-          let dm = await agent.createDmWithAddress(validHex(ownerAddress));
+          const normalizedOwnerAddress = validHex(ownerAddress);
+          log(`Creating DM with owner - resolved ENS "${OWNER_NAME}" to address: ${ownerAddress}`);
+          log(`Normalized owner address (validHex): ${normalizedOwnerAddress}`);
+          log(`Address comparison - original: ${ownerAddress}, normalized: ${normalizedOwnerAddress}, match: ${ownerAddress.toLowerCase() === normalizedOwnerAddress.toLowerCase()}`);
+          
+          let dm = await agent.createDmWithAddress(normalizedOwnerAddress);
           log(`Created DM with owner. Conversation ID: ${dm.id}, topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}`);
+          log(`DM peerAddress comparison - expected: ${normalizedOwnerAddress.toLowerCase()}, got: ${dm.peerAddress ? dm.peerAddress.toLowerCase() : 'none'}, match: ${dm.peerAddress && dm.peerAddress.toLowerCase() === normalizedOwnerAddress.toLowerCase()}`);
           
           // If conversation is uninitialized, try to sync
           if (!dm.topic || !dm.peerAddress) {
