@@ -390,7 +390,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(`Agent online. Address: ${addr || 'unknown'}`);
 
     // Notify owner address that the bot is online once the agent is fully started.
-    if (ownerAddress && state.ownerHasContacted) {
+    if (ownerAddress) {
       (async () => {
         try {
           const dm = await agent.createDmWithAddress(validHex(ownerAddress));
@@ -402,11 +402,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         }
       })();
     } else {
-      if (!ownerAddress) {
-        log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
-      } else if (!state.ownerHasContacted) {
-        log('Owner has not contacted the bot yet; skipping startup notification.');
-      }
+      log(`Owner "${OWNER_NAME}" could not be resolved; skipping startup notification.`);
     }
   });
 
