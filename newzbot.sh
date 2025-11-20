@@ -40,8 +40,8 @@ fi
 
 # Install dependencies if node_modules is missing
 if [[ ! -d "$ROOT_DIR/node_modules" ]]; then
-  echo "node_modules not found; running npm install..." | tee -a "$LOG_FILE"
-  (cd "$ROOT_DIR" && npm install) >>"$LOG_FILE" 2>&1
+  echo "node_modules not found; running pnpm install..." | tee -a "$LOG_FILE"
+  (cd "$ROOT_DIR" && pnpm install) >>"$LOG_FILE" 2>&1
 fi
 
 export NEWZBOT_LOG_PATH="$LOG_FILE"
@@ -50,4 +50,4 @@ export NEWZBOT_KEY_PATH="$KEY_FILE"
 echo "Launching XMTP agent (tail -f $LOG_FILE to monitor)..." | tee -a "$LOG_FILE"
 
 cd "$ROOT_DIR"
-node agent/newzbot-agent-runtime.js
+npx tsx agent/newzbot-agent-runtime.ts

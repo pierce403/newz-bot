@@ -1,10 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 
-const fs = require('node:fs');
-const path = require('node:path');
-const process = require('node:process');
-const { Wallet } = require('ethers');
-const {
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as process from 'node:process';
+import { Wallet } from 'ethers';
+import { Agent, AgentError, ConversationContext, validHex, type XmtpEnv } from '@xmtp/agent-sdk';
+import { CommandRouter } from '@xmtp/agent-sdk/middleware';
+import { createUser, createSigner, createNameResolver } from '@xmtp/agent-sdk/user';
+import {
   getUnsentItems,
   markItemsSent,
   searchNewsItems,
@@ -12,18 +15,25 @@ const {
   listFeeds,
   addFeed,
   deleteFeed,
-} = require('../dist-agent/agent/news-store.js');
+} from './news-store.js';
 
 const LOG_PATH = process.env.NEWZBOT_LOG_PATH || path.resolve(process.cwd(), 'newzbot.log');
 const KEY_PATH = process.env.NEWZBOT_KEY_PATH || path.resolve(process.cwd(), 'newzbot.key');
 const STATE_PATH = process.env.NEWZBOT_STATE_PATH || path.resolve(process.cwd(), 'newzbot.state.json');
-const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase();
+const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase() as XmtpEnv;
 const FEED_INTERVAL_MS = Number.parseInt(process.env.NEWZBOT_FEED_INTERVAL_MS || '60000', 10);
 const MAX_ITEMS_PER_TICK = Number.parseInt(process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '5', 10);
 const OWNER_NAME = '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
+// __dirname is not available in ESM, construct it from import.meta.url
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
-function log(message) {
+interface State {
+  subscriberAddress?: string;
+  ownerHasContacted?: boolean;
+}
+
+function log(message: string) {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   fs.appendFileSync(LOG_PATH, line);
   process.stdout.write(line);
@@ -45,7 +55,7 @@ function ensureKeypair() {
   return wallet.privateKey;
 }
 
-function loadState() {
+function loadState(): State {
   try {
     if (!fs.existsSync(STATE_PATH)) {
       return {};
@@ -56,26 +66,26 @@ function loadState() {
       subscriberAddress: parsed.subscriberAddress,
       ownerHasContacted: Boolean(parsed.ownerHasContacted),
     };
-  } catch (err) {
+  } catch (err: any) {
     log(`Failed to load state, starting fresh: ${err.message}`);
     return {};
   }
 }
 
-function saveState(state) {
+function saveState(state: State) {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
-  } catch (err) {
+  } catch (err: any) {
     log(`Failed to save state: ${err.message}`);
   }
 }
 
-function formatNewsText(item) {
+function formatNewsText(item: any) {
   const datePart = item.pubDate ? ` – ${item.pubDate}` : '';
   return `📰 ${item.title}${datePart}\n${item.link}`;
 }
 
-function formatSource(item) {
+function formatSource(item: any) {
   if (item.source) {
     return item.source;
   }
@@ -91,11 +101,7 @@ function formatSource(item) {
   return 'unknown';
 }
 
-async function startAgent(privateKey, state, ownerAddress) {
-  const { Agent, AgentError, ConversationContext, validHex } = await import('@xmtp/agent-sdk');
-  const { CommandRouter } = await import('@xmtp/agent-sdk/middleware');
-  const { createUser, createSigner } = await import('@xmtp/agent-sdk/user');
-
+async function startAgent(privateKey: string, state: State, ownerAddress: string | null) {
   log('Starting newzbot XMTP agent (runtime)...');
   log(`XMTP environment: ${XMTP_ENV}`);
   log(`Database path: ${path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`)}`);
@@ -108,7 +114,7 @@ async function startAgent(privateKey, state, ownerAddress) {
   const signer = createSigner(user);
 
   log('Creating XMTP agent...');
-  let agent;
+  let agent: Agent;
   const dbPath = path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`);
 
   try {
@@ -125,17 +131,17 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Current installation ID: ${agent.client.installationId}`);
       
       // Get all installations for this inbox
-      let inboxState;
+      let inboxState: any;
       try {
-        if (agent.client.preferences && typeof agent.client.preferences.inboxState === 'function') {
-          inboxState = await agent.client.preferences.inboxState();
-        } else if (typeof agent.client.inboxState === 'function') {
+        if (agent.client.preferences && typeof (agent.client.preferences as any).inboxState === 'function') {
+          inboxState = await (agent.client.preferences as any).inboxState();
+        } else if (typeof (agent.client as any).inboxState === 'function') {
           // Fallback for older SDK versions
-          inboxState = await agent.client.inboxState();
+          inboxState = await (agent.client as any).inboxState();
         } else {
           throw new Error('inboxState method not found on client or client.preferences');
         }
-      } catch (err) {
+      } catch (err: any) {
         throw new Error(`Failed to retrieve inbox state: ${err.message}`);
       }
 
@@ -145,7 +151,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Revoke all installations except the current one
       // IMPORTANT: revokeInstallations() expects Uint8Array[] (installation.bytes), NOT string[] (installation.id)
       const installationsToRevoke = installations
-        .filter(installation => {
+        .filter((installation: any) => {
           // Compare bytes arrays
           if (installation.bytes.length !== currentInstallationIdBytes.length) return true;
           for (let i = 0; i < installation.bytes.length; i++) {
@@ -153,7 +159,7 @@ async function startAgent(privateKey, state, ownerAddress) {
           }
           return false;
         })
-        .map(installation => installation.bytes);
+        .map((installation: any) => installation.bytes);
       
       if (installationsToRevoke.length > 0) {
         log(`Found ${installationsToRevoke.length} old installation(s) to revoke.`);
@@ -164,13 +170,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       } else {
         log(`✓ No old installations to revoke. This is the only installation.`);
       }
-    } catch (installErr) {
+    } catch (installErr: any) {
       log(`WARNING: Error checking/revoking installations: ${installErr.message}`);
       log(`WARNING: Stack: ${installErr.stack}`);
       log(`WARNING: Multiple installations may cause HPKE decryption errors.`);
     }
 
-  } catch (err) {
+  } catch (err: any) {
     const msg = err.message ? err.message.toLowerCase() : '';
     // Check for common database corruption errors or generic database failures
     if (msg.includes('database disk image is malformed') || msg.includes('corrupt') || msg.includes('sqlite')) {
@@ -198,7 +204,7 @@ async function startAgent(privateKey, state, ownerAddress) {
             dbPath,
           });
           log('XMTP agent created successfully after clearing corrupted DB');
-        } catch (retryErr) {
+        } catch (retryErr: any) {
           log(`ERROR: Failed to create XMTP agent even after fresh DB: ${retryErr.message}`);
           throw retryErr;
         }
@@ -214,7 +220,7 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   let isStopped = false;
 
-  async function sendNewItemsToSubscriber(isFirstRun) {
+  async function sendNewItemsToSubscriber(isFirstRun: boolean) {
     const newItems = getUnsentItems(MAX_ITEMS_PER_TICK);
 
     if (!state.subscriberAddress) {
@@ -246,16 +252,16 @@ async function startAgent(privateKey, state, ownerAddress) {
       // Try to get existing conversation first, or create if needed
       // Note: createDmWithAddress will create a conversation, but it may not be fully initialized
       // until the first message is exchanged. We'll handle errors gracefully.
-      let dm;
+      let dm: any;
       try {
         // First, try to find existing conversation
         const conversations = await agent.client.conversations.list();
-        const existingConvo = conversations.find(c =>
+        const existingConvo = conversations.find((c: any) =>
           (c.peerAddress && c.peerAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase()) ||
           (c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === normalizedSubscriberAddress.toLowerCase())
         );
 
-        if (existingConvo && existingConvo.topic) {
+        if (existingConvo && (existingConvo as any).topic) {
           log(`Found existing conversation for subscriber: ${existingConvo.id}`);
           dm = existingConvo;
         } else {
@@ -263,7 +269,7 @@ async function startAgent(privateKey, state, ownerAddress) {
           dm = await agent.createDmWithAddress(normalizedSubscriberAddress);
           log(`DM conversation created. Conversation ID: ${dm.id}`);
         }
-      } catch (createErr) {
+      } catch (createErr: any) {
         log(`ERROR creating conversation: ${createErr.message}`);
         log(`ERROR: This may happen if the conversation isn't ready yet. Will retry on next feed loop.`);
         throw createErr;
@@ -280,8 +286,8 @@ async function startAgent(privateKey, state, ownerAddress) {
       }
 
       const ctx = new ConversationContext({ conversation: dm, client: agent.client });
-      log(`Conversation context created. Client address: ${agent.client.address || 'unknown'}`);
-      log(`Bot sending from address: ${wallet.address}, Client address: ${agent.client.address || 'unknown'}`);
+      log(`Conversation context created. Client address: ${(agent.client as any).address || 'unknown'}`);
+      log(`Bot sending from address: ${wallet.address}, Client address: ${(agent.client as any).address || 'unknown'}`);
 
       log(
         `Sending ${newItems.length} new DB items to subscriber ${state.subscriberAddress} in conversation ${dm.id}.`,
@@ -296,14 +302,14 @@ async function startAgent(privateKey, state, ownerAddress) {
           log(`Attempting to send message for item: ${item.title} (ID: ${item.id})`);
           log(`Message text preview: ${text.substring(0, 100)}...`);
           log(`Conversation details - topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'}, id: ${dm.id}`);
-          const messageResult = await ctx.sendText(text);
+          const messageResult: any = await ctx.sendText(text);
           log(`✓ Successfully sent item: ${item.title} (ID: ${item.id})`);
           log(`✓ Message result: ${messageResult ? JSON.stringify(messageResult, Object.getOwnPropertyNames(messageResult)) : 'no result object'}`);
-          if (messageResult && messageResult.id) {
-            log(`✓ Message ID: ${messageResult.id}`);
+          if (messageResult && (messageResult as any)?.id) {
+            log(`✓ Message ID: ${(messageResult as any).id}`);
           }
           successCount++;
-        } catch (err) {
+        } catch (err: any) {
           failCount++;
           log(`✗ ERROR sending item "${item.title}" (ID: ${item.id}): ${err.message}`);
           log(`✗ Error stack: ${err.stack}`);
@@ -314,7 +320,7 @@ async function startAgent(privateKey, state, ownerAddress) {
 
       if (successCount > 0) {
         log(`Successfully sent ${successCount} out of ${newItems.length} items.`);
-        markItemsSent(newItems.map((item) => item.id));
+        markItemsSent(newItems.map((item: any) => item.id));
       } else {
         log(`ERROR: Failed to send all ${newItems.length} items. Not marking as sent.`);
       }
@@ -322,7 +328,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       if (failCount > 0) {
         log(`WARNING: ${failCount} items failed to send. Check logs above for details.`);
       }
-    } catch (err) {
+    } catch (err: any) {
       log(`ERROR: Failed to create conversation or send messages: ${err.message}`);
       log(`ERROR: Stack trace: ${err.stack}`);
       log(`ERROR: Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
@@ -356,7 +362,7 @@ async function startAgent(privateKey, state, ownerAddress) {
 
           // If we successfully restarted, we can reset the counter after a successful run period
           // But for now, let's just continue. The counter will be reset if we hit the else block below.
-        } catch (restartErr) {
+        } catch (restartErr: any) {
           log(`✗ Failed to restart agent: ${restartErr.message}`);
           // Wait a bit before retrying
           await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -374,7 +380,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       try {
         await sendNewItemsToSubscriber(isFirstRun);
         isFirstRun = false;
-      } catch (err) {
+      } catch (err: any) {
         log(`Feed loop error: ${err.message}`);
         log(`Feed loop error stack: ${err.stack}`);
         log(`Feed loop error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
@@ -386,7 +392,7 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   const router = new CommandRouter();
 
-  router.command('/reload', async (ctx) => {
+  router.command('/reload', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     log(`/reload command received from ${sender || 'unknown'}`);
 
@@ -395,14 +401,14 @@ async function startAgent(privateKey, state, ownerAddress) {
 
     // Lazy-load child_process to avoid paying the cost on normal startup.
     // eslint-disable-next-line global-require
-    const { exec } = require('node:child_process');
+    const { exec } = await import('node:child_process');
 
-    exec('git pull --rebase', { cwd: ROOT_DIR }, (err, stdout, stderr) => {
-      if (stdout && stdout.trim()) {
-        log(`git pull stdout:\n${stdout.trim()}`);
+    exec('git pull --rebase', { cwd: ROOT_DIR } as any, (err, stdout, stderr) => {
+      if (stdout && String(stdout).trim()) {
+        log(`git pull stdout:\n${String(stdout).trim()}`);
       }
-      if (stderr && stderr.trim()) {
-        log(`git pull stderr:\n${stderr.trim()}`);
+      if (stderr && String(stderr).trim()) {
+        log(`git pull stderr:\n${String(stderr).trim()}`);
       }
       if (err) {
         log(`git pull failed: ${err.message}`);
@@ -414,14 +420,14 @@ async function startAgent(privateKey, state, ownerAddress) {
         cwd: ROOT_DIR,
         detached: true,
         stdio: 'ignore',
-      });
+      } as any);
 
       // Exit current process so the new instance can take over cleanly.
       process.exit(0);
     });
   });
 
-  router.command('/list', async (ctx) => {
+  router.command('/list', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     log(`/list command received from ${sender || 'unknown'}`);
     const feeds = listFeeds();
@@ -433,7 +439,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         return;
       }
 
-      const lines = feeds.map((feed) => {
+      const lines = feeds.map((feed: any) => {
         const label = feed.title || feed.url;
         return `${feed.id}. ${label}\n${feed.url}`;
       });
@@ -442,13 +448,13 @@ async function startAgent(privateKey, state, ownerAddress) {
       const body = [header, ...lines].join('\n\n');
       await ctx.sendText(body);
       log(`✓ Sent /list response (${feeds.length} feeds) to ${sender || 'unknown'}`);
-    } catch (err) {
+    } catch (err: any) {
       log(`✗ ERROR sending /list response: ${err.message}`);
       log(`✗ Error stack: ${err.stack}`);
     }
   });
 
-  router.command('/add', async (ctx) => {
+  router.command('/add', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     const raw = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
     const trimmed = raw.trim();
@@ -458,7 +464,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       try {
         await ctx.sendText('Usage: /add <feed-url>');
         log(`✓ Sent /add usage response to ${sender || 'unknown'}`);
-      } catch (err) {
+      } catch (err: any) {
         log(`✗ ERROR sending /add usage response: ${err.message}`);
       }
       return;
@@ -471,17 +477,17 @@ async function startAgent(privateKey, state, ownerAddress) {
       const label = feed.title || feed.url;
       await ctx.sendText(`Added feed #${feed.id}: ${label}\n${feed.url}\n\nRun the collector to fetch new items.`);
       log(`✓ Added feed #${feed.id} and sent confirmation to ${sender || 'unknown'}`);
-    } catch (err) {
+    } catch (err: any) {
       log(`✗ ERROR adding feed: ${err.message}`);
       try {
         await ctx.sendText(`Failed to add feed: ${err.message}`);
-      } catch (sendErr) {
+      } catch (sendErr: any) {
         log(`✗ ERROR sending /add error response: ${sendErr.message}`);
       }
     }
   });
 
-  router.command('/remove', async (ctx) => {
+  router.command('/remove', async (ctx: any) => {
     const raw = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -499,7 +505,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText(`Removed feed with id ${id} (if it existed).`);
   });
 
-  router.command('/recent', async (ctx) => {
+  router.command('/recent', async (ctx: any) => {
     const items = listRecentItems(5, 0);
 
     if (!items.length) {
@@ -507,7 +513,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       return;
     }
 
-    const lines = items.map((item, index) => {
+    const lines = items.map((item: any, index: number) => {
       const source = formatSource(item);
       return `${index + 1}. ${item.title} (${source})\n${item.link}`;
     });
@@ -517,7 +523,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText(body);
   });
 
-  router.command('/test', async (ctx) => {
+  router.command('/test', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation?.id || 'unknown';
     log(`/test command received from ${sender || 'unknown'} in conversation ${convoId}`);
@@ -526,30 +532,30 @@ async function startAgent(privateKey, state, ownerAddress) {
     try {
       // First, try to create a new conversation to test initialization
       log(`Testing conversation creation with ${sender}...`);
-      let testDm;
+      let testDm: any;
       try {
-        testDm = await agent.createDmWithAddress(validHex(sender));
+        testDm = await agent.createDmWithAddress(validHex(sender!));
         log(`Created test DM - topic: ${testDm.topic || 'none'}, peerAddress: ${testDm.peerAddress || 'none'}, id: ${testDm.id}`);
 
         // Check if conversation is initialized
-        if (!testDm.topic || !testDm.peerAddress) {
+        if (!(testDm as any).topic || !(testDm as any).peerAddress) {
           log(`WARNING: Test conversation appears uninitialized`);
           await agent.client.conversations.sync();
           const conversations = await agent.client.conversations.list();
-          const foundConvo = conversations.find(c =>
-            c.peerAddress && c.peerAddress.toLowerCase() === sender.toLowerCase()
+          const foundConvo = conversations.find((c: any) =>
+            c.peerAddress && c.peerAddress.toLowerCase() === sender!.toLowerCase()
           );
           if (foundConvo) {
-            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}`);
+            log(`Found conversation after sync - topic: ${(foundConvo as any).topic || 'none'}, peerAddress: ${(foundConvo as any).peerAddress || 'none'}`);
             testDm = foundConvo;
           }
         }
-      } catch (createErr) {
+      } catch (createErr: any) {
         log(`Error creating test DM: ${createErr.message}`);
         testDm = ctx.conversation; // Fall back to existing conversation
       }
 
-      const testMessage = `Test message from bot ${agent.client.address || 'unknown'} at ${new Date().toISOString()}`;
+      const testMessage = `Test message from bot ${(agent.client as any).address || 'unknown'} at ${new Date().toISOString()}`;
       log(`Sending test message: "${testMessage}"`);
 
       // Use the test conversation if we created one, otherwise use the existing context
@@ -568,20 +574,20 @@ async function startAgent(privateKey, state, ownerAddress) {
         log(`✓ Test message ID: ${result.id}`);
       }
 
-      await ctx.sendText(`Test message sent! Check your client to see if you received it. Bot address: ${agent.client.address || 'unknown'}`);
-    } catch (err) {
+      await ctx.sendText(`Test message sent! Check your client to see if you received it. Bot address: ${(agent.client as any).address || 'unknown'}`);
+    } catch (err: any) {
       log(`✗ ERROR sending test message: ${err.message}`);
       log(`✗ Error stack: ${err.stack}`);
       log(`✗ Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
       try {
         await ctx.sendText(`Error sending test message: ${err.message}`);
-      } catch (sendErr) {
+      } catch (sendErr: any) {
         log(`✗ ERROR sending error response: ${sendErr.message}`);
       }
     }
   });
 
-  router.command('/help', async (ctx) => {
+  router.command('/help', async (ctx: any) => {
     const helpText =
       'newz.bot commands:\n' +
       '  /help               Show this help message\n' +
@@ -597,7 +603,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText(helpText);
   });
 
-  router.command('/search', async (ctx) => {
+  router.command('/search', async (ctx: any) => {
     const query = (ctx.message && typeof ctx.message.content === 'string'
       ? ctx.message.content
       : ''
@@ -614,7 +620,7 @@ async function startAgent(privateKey, state, ownerAddress) {
       return;
     }
 
-    const lines = matches.map((item, index) => {
+    const lines = matches.map((item: any, index: number) => {
       const source = formatSource(item);
       return `${index + 1}. ${item.title} (${source})\n${item.link}`;
     });
@@ -624,7 +630,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText(body);
   });
 
-  router.command('/start', async (ctx) => {
+  router.command('/start', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation?.id || 'unknown';
     log(`/start command received from ${sender || 'unknown'} in conversation ${convoId}`);
@@ -650,13 +656,13 @@ async function startAgent(privateKey, state, ownerAddress) {
     try {
       await ctx.sendText("Hi, I can't do anything yet.");
       log(`✓ Sent /start response to ${sender}`);
-    } catch (err) {
+    } catch (err: any) {
       log(`✗ ERROR sending /start response: ${err.message}`);
       log(`✗ Error stack: ${err.stack}`);
     }
   });
 
-  router.command('/stop', async (ctx) => {
+  router.command('/stop', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     if (!sender) {
       await ctx.sendText("Hi, I can't do anything yet.");
@@ -672,7 +678,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     await ctx.sendText("Hi, I can't do anything yet.");
   });
 
-  router.default(async (ctx) => {
+  router.default(async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     const text = ctx.message && typeof ctx.message.content === 'string' ? ctx.message.content : '';
     log(`Received non-command message from ${sender || 'unknown'}: "${text}"`);
@@ -681,7 +687,7 @@ async function startAgent(privateKey, state, ownerAddress) {
         'Hi, I am newz.bot. Available commands: /help, /start, /stop, /reload, /list, /add, /remove, /search <query>, /recent.',
       );
       log(`✓ Sent default response to ${sender || 'unknown'}`);
-    } catch (err) {
+    } catch (err: any) {
       log(`✗ ERROR sending default response: ${err.message}`);
       log(`✗ Error stack: ${err.stack}`);
     }
@@ -689,7 +695,7 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   agent.use(router.middleware());
 
-  agent.on('text', async (ctx) => {
+  agent.on('text', async (ctx: any) => {
     const sender = await ctx.getSenderAddress();
     const convoId = ctx.conversation.id;
     const msgId = ctx.message.id;
@@ -697,7 +703,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(
       `Received text from ${sender || 'unknown'} in conversation ${convoId}, msg ${msgId}: ${content}`,
     );
-    log(`Message details - conversation topic: ${ctx.conversation.topic || 'none'}, peerAddress: ${ctx.conversation.peerAddress || 'none'}`);
+    log(`Conversation details - topic: ${(ctx.conversation as any).topic || 'none'}, peerAddress: ${(ctx.conversation as any).peerAddress || 'none'}`);
     log(`Sender address details - raw: ${sender || 'none'}, normalized: ${sender ? validHex(sender) : 'none'}`);
 
     if (ownerAddress) {
@@ -717,12 +723,12 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   // Handle conversation events - this is fired when a new conversation is created
   // This helps us track when conversations are properly initialized
-  agent.on('conversation', async (conversation) => {
+  agent.on('conversation', async (conversation: any) => {
     log(`New conversation event received - id: ${conversation.id || 'none'}, topic: ${conversation.topic || 'none'}, peerAddress: ${conversation.peerAddress || 'none'}`);
     log(`Conversation properties: ${JSON.stringify(Object.keys(conversation))}`);
   });
 
-  agent.on('unhandledError', (error) => {
+  agent.on('unhandledError', (error: any) => {
     if (error instanceof AgentError) {
       const errorCode = error.code;
       const errorMessage = error.message;
@@ -752,7 +758,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     }
   });
 
-  agent.on('start', (ctx) => {
+  agent.on('start', (ctx: any) => {
     const addr = ctx.getClientAddress();
     log(`Agent online. Address: ${addr || 'unknown'}`);
     log(
@@ -792,7 +798,7 @@ async function startAgent(privateKey, state, ownerAddress) {
             
           await ctx.sendText(msg);
           log(`✓ Startup notification sent to ${role}.`);
-        } catch (err) {
+        } catch (err: any) {
           log(`WARNING: Failed to send startup notification: ${err.message}`);
         }
       })();
@@ -811,7 +817,7 @@ async function startAgent(privateKey, state, ownerAddress) {
   try {
     await agent.start();
     log('✓ Agent has started successfully; entering feed loop.');
-  } catch (err) {
+  } catch (err: any) {
     log(`✗ ERROR: Failed to start agent: ${err.message}`);
     log(`✗ Agent start error stack: ${err.stack}`);
     log(`✗ Agent start error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}`);
@@ -839,7 +845,7 @@ async function main() {
   const state = loadState();
   log(`Loaded state - subscriberAddress: ${state.subscriberAddress || 'none'}`);
 
-  let ownerAddress = null;
+  let ownerAddress: string | null = null;
 
   try {
     const { createNameResolver } = await import('@xmtp/agent-sdk/user');
@@ -851,7 +857,7 @@ async function main() {
     } else {
       log(`✗ Failed to resolve owner "${OWNER_NAME}" to an address; owner-only commands disabled.`);
     }
-  } catch (err) {
+  } catch (err: any) {
     log(`✗ Error resolving owner "${OWNER_NAME}": ${err.message}`);
     log(`✗ Owner resolution error stack: ${err.stack}`);
   }
@@ -869,7 +875,7 @@ async function main() {
       await startAgent(privateKey, state, ownerAddress);
       log(`Agent started successfully on attempt #${attempt + 1}`);
       return;
-    } catch (err) {
+    } catch (err: any) {
       attempt += 1;
       const message = err && err.message ? err.message : String(err);
       const lower = message.toLowerCase();

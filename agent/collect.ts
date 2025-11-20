@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import Parser from 'rss-parser';
-import { saveNewsItems, type NewNewsItem, listFeeds, updateFeedTitle } from './news-store';
+import { saveNewsItems, type NewNewsItem, listFeeds, updateFeedTitle } from './news-store.js';
 
 const LOG_PATH = process.env.NEWZBOT_LOG_PATH || path.resolve(process.cwd(), 'newzbot.log');
 
