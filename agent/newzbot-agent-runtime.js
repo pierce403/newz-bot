@@ -275,79 +275,8 @@ async function startAgent(privateKey, state, ownerAddress) {
 
       // Check if conversation needs initialization
       if (!dm.topic || !dm.peerAddress) {
-        log(`WARNING: Conversation appears uninitialized (topic: ${dm.topic || 'none'}, peerAddress: ${dm.peerAddress || 'none'})`);
-        log(`Attempting to sync conversations...`);
-        try {
-          // Try to sync the conversation
-          await agent.client.conversations.sync();
-          log(`Conversation sync completed`);
-
-          // Re-fetch the conversation to see if it's now initialized
-          const conversations = await agent.client.conversations.list();
-          log(`Found ${conversations.length} total conversations after sync`);
-
-          // Log details of all conversations for debugging
-          conversations.forEach((c, idx) => {
-            log(`Conversation ${idx}: id=${c.id || 'none'}, topic=${c.topic || 'none'}, peerAddress=${c.peerAddress || 'none'}, peerAccountAddress=${c.peerAccountAddress || 'none'}`);
-            log(`  Conversation ${idx} keys: ${JSON.stringify(Object.keys(c))}`);
-            // Try to serialize the whole object to see its structure
-            try {
-              const serialized = JSON.stringify(c, (key, value) => {
-                if (typeof value === 'object' && value !== null) {
-                  return Object.getOwnPropertyNames(value).reduce((acc, prop) => {
-                    try {
-                      acc[prop] = value[prop];
-                    } catch (e) {
-                      acc[prop] = '[unable to access]';
-                    }
-                    return acc;
-                  }, {});
-                }
-                return value;
-              }, 2);
-              log(`  Conversation ${idx} full structure: ${serialized}`);
-            } catch (serializeErr) {
-              log(`  Conversation ${idx} serialization failed: ${serializeErr.message}`);
-            }
-            // Try accessing properties directly
-            log(`  Conversation ${idx} direct access - id: ${c.id}, topic: ${c.topic}, peerAddress: ${c.peerAddress}, peerAccountAddress: ${c.peerAccountAddress}`);
-          });
-
-          // Try multiple ways to match the conversation
-          const targetAddrLower = state.subscriberAddress.toLowerCase();
-          let foundConvo = conversations.find(c =>
-            c.peerAddress && c.peerAddress.toLowerCase() === targetAddrLower
-          );
-
-          // If not found by peerAddress, try by peerAccountAddress
-          if (!foundConvo) {
-            foundConvo = conversations.find(c =>
-              c.peerAccountAddress && c.peerAccountAddress.toLowerCase() === targetAddrLower
-            );
-          }
-
-          // If still not found, try matching by conversation ID (if we created one)
-          if (!foundConvo && dm.id) {
-            foundConvo = conversations.find(c => c.id === dm.id);
-          }
-
-          if (foundConvo) {
-            log(`Found conversation after sync - topic: ${foundConvo.topic || 'none'}, peerAddress: ${foundConvo.peerAddress || 'none'}, peerAccountAddress: ${foundConvo.peerAccountAddress || 'none'}, id: ${foundConvo.id || 'none'}`);
-            // Use the found conversation if it's better initialized
-            if (foundConvo.topic && (foundConvo.peerAddress || foundConvo.peerAccountAddress)) {
-              log(`Using synced conversation instead (better initialized)`);
-              dm = foundConvo;
-            } else {
-              log(`Synced conversation also uninitialized, keeping created conversation`);
-            }
-          } else {
-            log(`No existing conversation found after sync for ${state.subscriberAddress}, using created conversation`);
-            log(`Available conversations: ${conversations.map(c => `${c.peerAddress || c.peerAccountAddress || 'unknown'}:${c.topic || 'no-topic'}`).join(', ')}`);
-          }
-        } catch (syncErr) {
-          log(`WARNING: Error syncing conversations: ${syncErr.message}`);
-          log(`Will proceed with created conversation despite sync error`);
-        }
+        log(`WARNING: Conversation object appears incomplete (topic: ${dm.topic || 'none'}). This is normal for new conversations.`);
+        log(`Proceeding to send message to establish topic...`);
       }
 
       const ctx = new ConversationContext({ conversation: dm, client: agent.client });
@@ -828,7 +757,7 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(
       `Client inboxId=${ctx.client.inboxId}, installationId=${ctx.client.installationId}, isRegistered=${ctx.client.isRegistered}`,
     );
-    log(`Agent client state - address: ${agent.client.address || 'unknown'}, env: ${XMTP_ENV}`);
+      log(`Agent client state - address: ${wallet.address}, env: ${XMTP_ENV}`);
 
     // Verify consistency: wallet address should match client address
     const wallet = new Wallet(privateKey);
@@ -841,24 +770,31 @@ async function startAgent(privateKey, state, ownerAddress) {
     // Startup notification:
     // We send a message on startup to ensure the subscriber's client updates its contact bundle
     // for this installation. This helps prevent HPKE decryption errors on subsequent messages.
-    if (state.subscriberAddress) {
-      const normalizedSubscriber = validHex(state.subscriberAddress);
-      log(`Sending startup notification to ${normalizedSubscriber}...`);
+    const targetAddress = state.subscriberAddress || ownerAddress;
+    
+    if (targetAddress) {
+      const normalizedTarget = validHex(targetAddress);
+      const role = state.subscriberAddress ? 'subscriber' : 'owner (fallback)';
+      log(`Sending startup notification to ${role} ${normalizedTarget}...`);
 
       // Use an async IIFE to not block the event handler
       (async () => {
         try {
-          const dm = await agent.createDmWithAddress(normalizedSubscriber);
+          const dm = await agent.createDmWithAddress(normalizedTarget);
           const ctx = new ConversationContext({ conversation: dm, client: agent.client });
-          await ctx.sendText("Bot online. Connection established.");
-          log("✓ Startup notification sent.");
+          
+          const msg = state.subscriberAddress 
+            ? "Bot online. Connection established." 
+            : `🤖 NewzBot Online\nEnv: ${XMTP_ENV}\n\nI have no subscriber. Send /start to subscribe.`;
+            
+          await ctx.sendText(msg);
+          log(`✓ Startup notification sent to ${role}.`);
         } catch (err) {
           log(`WARNING: Failed to send startup notification: ${err.message}`);
-          // Ignore errors - this is a best-effort attempt to sync
         }
       })();
     } else {
-      log(`No subscriber registered; skipping startup notification.`);
+      log(`No subscriber and no owner address available; skipping startup notification.`);
     }
   });
 
