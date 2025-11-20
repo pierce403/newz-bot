@@ -757,10 +757,12 @@ async function startAgent(privateKey, state, ownerAddress) {
     log(
       `Client inboxId=${ctx.client.inboxId}, installationId=${ctx.client.installationId}, isRegistered=${ctx.client.isRegistered}`,
     );
-      log(`Agent client state - address: ${wallet.address}, env: ${XMTP_ENV}`);
-
+    
     // Verify consistency: wallet address should match client address
     const wallet = new Wallet(privateKey);
+    
+    log(`Agent client state - address: ${wallet.address}, env: ${XMTP_ENV}`);
+
     if (addr && addr.toLowerCase() !== wallet.address.toLowerCase()) {
       log(`WARNING: Address mismatch! Wallet address: ${wallet.address}, Client address: ${addr}`);
     } else {
