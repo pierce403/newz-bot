@@ -7,7 +7,7 @@ import { Wallet } from 'ethers';
 import { Agent, AgentError, ConversationContext, validHex } from '@xmtp/agent-sdk';
 import { CommandRouter } from '@xmtp/agent-sdk/middleware';
 import { createUser, createSigner } from '@xmtp/agent-sdk/user';
-import { getUnsentItems, markItemsSent, type StoredNewsItem } from './news-store';
+import { getUnsentItems, markItemsSent, type StoredNewsItem } from './news-store.js';
 
 const LOG_PATH = process.env.NEWZBOT_LOG_PATH || path.resolve(process.cwd(), 'newzbot.log');
 const KEY_PATH = process.env.NEWZBOT_KEY_PATH || path.resolve(process.cwd(), 'newzbot.key');
