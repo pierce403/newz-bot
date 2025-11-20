@@ -33,6 +33,7 @@ newzbot-xmtp-*.db3-shm
 newzbot-xmtp-*.db3-wal
 newzbot.log
 newzbot.key
+newzbot.state.json
 
 # debug
 npm-debug.log*
