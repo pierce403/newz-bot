@@ -20,7 +20,7 @@ const STATE_PATH = process.env.NEWZBOT_STATE_PATH || path.resolve(process.cwd(),
 const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase();
 const FEED_INTERVAL_MS = Number.parseInt(process.env.NEWZBOT_FEED_INTERVAL_MS || '60000', 10);
 const MAX_ITEMS_PER_TICK = Number.parseInt(process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '5', 10);
-const OWNER_NAME = '0x06f706B422e6A8bCca90C53087FE06119110584c';
+const OWNER_NAME = '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 function log(message) {
