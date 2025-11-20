@@ -50,8 +50,23 @@ async function main() {
   const result = await ctx.sendText('hello');
   console.log('Message sent!');
   console.log('Return value:', result);
+  console.log('Return value type:', typeof result);
   console.log('Message ID:', result?.id || 'no id');
-  console.log('Full result:', JSON.stringify(result, Object.getOwnPropertyNames(result), 2));
+  
+  if (result) {
+    try {
+      console.log('Full result:', JSON.stringify(result, Object.getOwnPropertyNames(result), 2));
+    } catch (e) {
+      console.log('Could not stringify result:', e);
+    }
+  } else {
+    console.log('Result is undefined/null - sendText() did not return a message object');
+  }
+  
+  console.log('\nConversation details:');
+  console.log('  Conversation ID:', dm.id);
+  console.log('  Topic:', dm.topic || 'none');
+  console.log('  Peer address:', dm.peerAddress || 'none');
 
   // Exit successfully
   process.exit(0);
