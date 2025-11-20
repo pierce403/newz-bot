@@ -109,10 +109,12 @@ async function startAgent(privateKey, state, ownerAddress) {
 
   log('Creating XMTP agent...');
   let agent;
+  const dbPath = path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`);
+
   try {
     agent = await Agent.create(signer, {
       env: XMTP_ENV,
-      dbPath: path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`),
+      dbPath,
     });
     log('XMTP agent created successfully');
 
@@ -156,9 +158,45 @@ async function startAgent(privateKey, state, ownerAddress) {
     }
 
   } catch (err) {
-    log(`ERROR: Failed to create XMTP agent: ${err.message}`);
-    log(`ERROR: Stack trace: ${err.stack}`);
-    throw err;
+    const msg = err.message ? err.message.toLowerCase() : '';
+    // Check for common database corruption errors or generic database failures
+    if (msg.includes('database disk image is malformed') || msg.includes('corrupt') || msg.includes('sqlite')) {
+      log(`ERROR: Detected potential database corruption: ${err.message}`);
+      if (fs.existsSync(dbPath)) {
+        const corruptedPath = `${dbPath}.corrupted.${Date.now()}`;
+        log(`Renaming corrupted DB to ${corruptedPath} and retrying creation...`);
+        fs.renameSync(dbPath, corruptedPath);
+        // Also try to move WAL/SHM files if they exist
+        if (fs.existsSync(`${dbPath}-wal`)) {
+          try {
+            fs.renameSync(`${dbPath}-wal`, `${corruptedPath}-wal`);
+          } catch { /* ignore */ }
+        }
+        if (fs.existsSync(`${dbPath}-shm`)) {
+          try {
+            fs.renameSync(`${dbPath}-shm`, `${corruptedPath}-shm`);
+          } catch { /* ignore */ }
+        }
+
+        // Retry creation once
+        try {
+          agent = await Agent.create(signer, {
+            env: XMTP_ENV,
+            dbPath,
+          });
+          log('XMTP agent created successfully after clearing corrupted DB');
+        } catch (retryErr) {
+          log(`ERROR: Failed to create XMTP agent even after fresh DB: ${retryErr.message}`);
+          throw retryErr;
+        }
+      } else {
+        throw err;
+      }
+    } else {
+      log(`ERROR: Failed to create XMTP agent: ${err.message}`);
+      log(`ERROR: Stack trace: ${err.stack}`);
+      throw err;
+    }
   }
 
   let isStopped = false;

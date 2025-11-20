@@ -14,6 +14,7 @@ exports.addFeed = addFeed;
 exports.deleteFeed = deleteFeed;
 exports.updateFeedTitle = updateFeedTitle;
 const node_path_1 = __importDefault(require("node:path"));
+const node_fs_1 = __importDefault(require("node:fs"));
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const DB_PATH = process.env.NEWZBOT_DB_PATH || node_path_1.default.resolve(process.cwd(), 'newzbot.db');
 const DEFAULT_FEEDS = [
@@ -31,9 +32,39 @@ const DEFAULT_FEEDS = [
 let db = null;
 function getDb() {
     if (!db) {
-        db = new better_sqlite3_1.default(DB_PATH);
-        db.pragma('journal_mode = WAL');
-        initSchema(db);
+        try {
+            db = new better_sqlite3_1.default(DB_PATH);
+            db.pragma('journal_mode = WAL');
+            initSchema(db);
+        }
+        catch (err) {
+            console.error(`[news-store] Database initialization failed: ${err.message}`);
+            if (node_fs_1.default.existsSync(DB_PATH)) {
+                const corruptedPath = `${DB_PATH}.corrupted.${Date.now()}`;
+                console.error(`[news-store] Renaming corrupted DB to ${corruptedPath} and starting fresh.`);
+                node_fs_1.default.renameSync(DB_PATH, corruptedPath);
+                // Also try to move WAL/SHM files if they exist
+                if (node_fs_1.default.existsSync(`${DB_PATH}-wal`)) {
+                    try {
+                        node_fs_1.default.renameSync(`${DB_PATH}-wal`, `${corruptedPath}-wal`);
+                    }
+                    catch { /* ignore */ }
+                }
+                if (node_fs_1.default.existsSync(`${DB_PATH}-shm`)) {
+                    try {
+                        node_fs_1.default.renameSync(`${DB_PATH}-shm`, `${corruptedPath}-shm`);
+                    }
+                    catch { /* ignore */ }
+                }
+                // Retry creation once
+                db = new better_sqlite3_1.default(DB_PATH);
+                db.pragma('journal_mode = WAL');
+                initSchema(db);
+            }
+            else {
+                throw err;
+            }
+        }
     }
     return db;
 }
