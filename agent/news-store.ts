@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import Database from 'better-sqlite3';
 
 const DB_PATH = process.env.NEWZBOT_DB_PATH || path.resolve(process.cwd(), 'newzbot.db');
@@ -49,9 +50,36 @@ let db: Database.Database | null = null;
 
 function getDb(): Database.Database {
   if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    initSchema(db);
+    try {
+      db = new Database(DB_PATH);
+      db.pragma('journal_mode = WAL');
+      initSchema(db);
+    } catch (err) {
+      console.error(`[news-store] Database initialization failed: ${(err as Error).message}`);
+      if (fs.existsSync(DB_PATH)) {
+        const corruptedPath = `${DB_PATH}.corrupted.${Date.now()}`;
+        console.error(`[news-store] Renaming corrupted DB to ${corruptedPath} and starting fresh.`);
+        fs.renameSync(DB_PATH, corruptedPath);
+        // Also try to move WAL/SHM files if they exist
+        if (fs.existsSync(`${DB_PATH}-wal`)) {
+          try {
+            fs.renameSync(`${DB_PATH}-wal`, `${corruptedPath}-wal`);
+          } catch { /* ignore */ }
+        }
+        if (fs.existsSync(`${DB_PATH}-shm`)) {
+          try {
+            fs.renameSync(`${DB_PATH}-shm`, `${corruptedPath}-shm`);
+          } catch { /* ignore */ }
+        }
+
+        // Retry creation once
+        db = new Database(DB_PATH);
+        db.pragma('journal_mode = WAL');
+        initSchema(db);
+      } else {
+        throw err;
+      }
+    }
   }
   return db;
 }
