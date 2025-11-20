@@ -125,7 +125,20 @@ async function startAgent(privateKey, state, ownerAddress) {
       log(`Current installation ID: ${agent.client.installationId}`);
       
       // Get all installations for this inbox
-      const inboxState = await agent.client.inboxState();
+      let inboxState;
+      try {
+        if (agent.client.preferences && typeof agent.client.preferences.inboxState === 'function') {
+          inboxState = await agent.client.preferences.inboxState();
+        } else if (typeof agent.client.inboxState === 'function') {
+          // Fallback for older SDK versions
+          inboxState = await agent.client.inboxState();
+        } else {
+          throw new Error('inboxState method not found on client or client.preferences');
+        }
+      } catch (err) {
+        throw new Error(`Failed to retrieve inbox state: ${err.message}`);
+      }
+
       const installations = inboxState.installations;
       log(`Total installations found: ${installations.length}`);
       
