@@ -20,7 +20,7 @@ const STATE_PATH = process.env.NEWZBOT_STATE_PATH || path.resolve(process.cwd(),
 const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase();
 const FEED_INTERVAL_MS = Number.parseInt(process.env.NEWZBOT_FEED_INTERVAL_MS || '60000', 10);
 const MAX_ITEMS_PER_TICK = Number.parseInt(process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '5', 10);
-const OWNER_NAME = 'deanpierce.eth';
+const OWNER_NAME = '0xe4A982bcbbBB6f6B894A7aFc97B0F1875E21CBD6';
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 function log(message) {
