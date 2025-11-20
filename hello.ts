@@ -47,8 +47,11 @@ async function main() {
   const dm = await agent.createDmWithAddress(target);
   const ctx = new ConversationContext({ conversation: dm, client: agent.client });
 
-  await ctx.sendText('hello');
+  const result = await ctx.sendText('hello');
   console.log('Message sent!');
+  console.log('Return value:', result);
+  console.log('Message ID:', result?.id || 'no id');
+  console.log('Full result:', JSON.stringify(result, Object.getOwnPropertyNames(result), 2));
 
   // Exit successfully
   process.exit(0);
