@@ -738,9 +738,10 @@ async function startAgent(privateKey, state, ownerAddress) {
       if (errorCode === 1002 || (errorCause && errorCause.includes('Decryption failed'))) {
         // Error 1002: Conversation streaming error (often HPKE decryption failures)
         log(`WARNING: Conversation streaming error - HPKE decryption failure.`);
-        log(`WARNING: This should not happen if installations are properly managed.`);
+        log(`WARNING: This usually means the sender (your phone/client) is encrypting for an old installation.`);
+        log(`WARNING: SOLUTION: Delete the conversation on your phone and start a new one.`);
         log(`WARNING: Current Installation ID: ${agent.client.installationId}`);
-        log(`WARNING: The agent will continue running. The sender may need to send another message.`);
+        log(`WARNING: The agent will continue running.`);
         // Don't crash the agent - let it continue
         return;
       }
