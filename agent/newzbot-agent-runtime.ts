@@ -23,14 +23,14 @@ const STATE_PATH = process.env.NEWZBOT_STATE_PATH || path.resolve(process.cwd(),
 const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase() as XmtpEnv;
 const FEED_INTERVAL_MS = Number.parseInt(process.env.NEWZBOT_FEED_INTERVAL_MS || '60000', 10);
 const MAX_ITEMS_PER_TICK = Number.parseInt(process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '5', 10);
-const OWNER_NAME = '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
+const OPERATOR_ADDRESS = process.env.NEWZBOT_OPERATOR_ADDRESS || '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
 // __dirname is not available in ESM, construct it from import.meta.url
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 interface State {
   subscriberAddress?: string;
-  ownerHasContacted?: boolean;
+  operatorHasContacted?: boolean;
 }
 
 function log(message: string) {
@@ -64,7 +64,7 @@ function loadState(): State {
     const parsed = JSON.parse(raw);
     return {
       subscriberAddress: parsed.subscriberAddress,
-      ownerHasContacted: Boolean(parsed.ownerHasContacted),
+      operatorHasContacted: Boolean(parsed.operatorHasContacted),
     };
   } catch (err: any) {
     log(`Failed to load state, starting fresh: ${err.message}`);
@@ -101,7 +101,7 @@ function formatSource(item: any) {
   return 'unknown';
 }
 
-async function startAgent(privateKey: string, state: State, ownerAddress: string | null) {
+async function startAgent(privateKey: string, state: State, operatorAddress: string | null) {
   log('Starting newzbot XMTP agent (runtime)...');
   log(`XMTP environment: ${XMTP_ENV}`);
   log(`Database path: ${path.resolve(process.cwd(), `newzbot-xmtp-${XMTP_ENV}.db3`)}`);
@@ -129,7 +129,7 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
     try {
       const currentInstallationIdBytes = agent.client.installationIdBytes;
       log(`Current installation ID: ${agent.client.installationId}`);
-      
+
       // Get all installations for this inbox
       let inboxState: any;
       try {
@@ -147,7 +147,7 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
 
       const installations = inboxState.installations;
       log(`Total installations found: ${installations.length}`);
-      
+
       // Revoke all installations except the current one
       // IMPORTANT: revokeInstallations() expects Uint8Array[] (installation.bytes), NOT string[] (installation.id)
       const installationsToRevoke = installations
@@ -160,10 +160,10 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
           return false;
         })
         .map((installation: any) => installation.bytes);
-      
+
       if (installationsToRevoke.length > 0) {
         log(`Found ${installationsToRevoke.length} old installation(s) to revoke.`);
-        
+
         await agent.client.revokeInstallations(installationsToRevoke);
         log(`✓ Successfully revoked ${installationsToRevoke.length} old installation(s).`);
         log(`✓ Only installation ${agent.client.installationId} should remain active.`);
@@ -706,17 +706,17 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
     log(`Conversation details - topic: ${(ctx.conversation as any).topic || 'none'}, peerAddress: ${(ctx.conversation as any).peerAddress || 'none'}`);
     log(`Sender address details - raw: ${sender || 'none'}, normalized: ${sender ? validHex(sender) : 'none'}`);
 
-    if (ownerAddress) {
+    if (operatorAddress) {
       const normalizedSender = sender ? validHex(sender) : null;
-      const normalizedOwner = validHex(ownerAddress);
-      log(`Address comparison - sender normalized: ${normalizedSender || 'none'}, owner normalized: ${normalizedOwner}, match: ${normalizedSender && normalizedSender.toLowerCase() === normalizedOwner.toLowerCase()}`);
+      const normalizedOperator = validHex(operatorAddress);
+      log(`Address comparison - sender normalized: ${normalizedSender || 'none'}, operator normalized: ${normalizedOperator}, match: ${normalizedSender && normalizedSender.toLowerCase() === normalizedOperator.toLowerCase()}`);
     }
 
-    if (ownerAddress && sender && sender.toLowerCase() === ownerAddress.toLowerCase()) {
-      if (!state.ownerHasContacted) {
-        state.ownerHasContacted = true;
+    if (operatorAddress && sender && sender.toLowerCase() === operatorAddress.toLowerCase()) {
+      if (!state.operatorHasContacted) {
+        state.operatorHasContacted = true;
         saveState(state);
-        log('Owner has contacted the bot; startup notifications will be sent on future restarts.');
+        log('Operator has contacted the bot; startup notifications will be sent on future restarts.');
       }
     }
   });
@@ -764,10 +764,10 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
     log(
       `Client inboxId=${ctx.client.inboxId}, installationId=${ctx.client.installationId}, isRegistered=${ctx.client.isRegistered}`,
     );
-    
+
     // Verify consistency: wallet address should match client address
     const wallet = new Wallet(privateKey);
-    
+
     log(`Agent client state - address: ${wallet.address}, env: ${XMTP_ENV}`);
 
     if (addr && addr.toLowerCase() !== wallet.address.toLowerCase()) {
@@ -779,11 +779,11 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
     // Startup notification:
     // We send a message on startup to ensure the subscriber's client updates its contact bundle
     // for this installation. This helps prevent HPKE decryption errors on subsequent messages.
-    const targetAddress = state.subscriberAddress || ownerAddress;
-    
+    const targetAddress = state.subscriberAddress || operatorAddress;
+
     if (targetAddress) {
       const normalizedTarget = validHex(targetAddress);
-      const role = state.subscriberAddress ? 'subscriber' : 'owner (fallback)';
+      const role = state.subscriberAddress ? 'subscriber' : 'operator (fallback)';
       log(`Sending startup notification to ${role} ${normalizedTarget}...`);
 
       // Use an async IIFE to not block the event handler
@@ -791,11 +791,11 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
         try {
           const dm = await agent.createDmWithAddress(normalizedTarget);
           const ctx = new ConversationContext({ conversation: dm, client: agent.client });
-          
-          const msg = state.subscriberAddress 
-            ? "Bot online. Connection established." 
+
+          const msg = state.subscriberAddress
+            ? "Bot online. Connection established."
             : `🤖 NewzBot Online\nEnv: ${XMTP_ENV}\n\nI have no subscriber. Send /start to subscribe.`;
-            
+
           await ctx.sendText(msg);
           log(`✓ Startup notification sent to ${role}.`);
         } catch (err: any) {
@@ -803,7 +803,7 @@ async function startAgent(privateKey: string, state: State, ownerAddress: string
         }
       })();
     } else {
-      log(`No subscriber and no owner address available; skipping startup notification.`);
+      log(`No subscriber and no operator address available; skipping startup notification.`);
     }
   });
 
@@ -837,6 +837,7 @@ async function main() {
   log(`  NEWZBOT_STATE_PATH: ${process.env.NEWZBOT_STATE_PATH || '(not set)'}`);
   log(`  NEWZBOT_FEED_INTERVAL_MS: ${process.env.NEWZBOT_FEED_INTERVAL_MS || '(not set)'}`);
   log(`  NEWZBOT_MAX_ITEMS_PER_TICK: ${process.env.NEWZBOT_MAX_ITEMS_PER_TICK || '(not set)'}`);
+  log(`  NEWZBOT_OPERATOR_ADDRESS: ${process.env.NEWZBOT_OPERATOR_ADDRESS || '(not set)'}`);
   log(`  WEB3BIO_API_KEY: ${process.env.WEB3BIO_API_KEY ? '(set)' : '(not set)'}`);
   log(`Resolved XMTP_ENV: ${XMTP_ENV}`);
   log(`Working directory: ${process.cwd()}`);
@@ -845,21 +846,21 @@ async function main() {
   const state = loadState();
   log(`Loaded state - subscriberAddress: ${state.subscriberAddress || 'none'}`);
 
-  let ownerAddress: string | null = null;
+  let operatorAddress: string | null = null;
 
   try {
     const { createNameResolver } = await import('@xmtp/agent-sdk/user');
     const resolveName = createNameResolver(process.env.WEB3BIO_API_KEY);
-    log(`Attempting to resolve owner name "${OWNER_NAME}"...`);
-    ownerAddress = await resolveName(OWNER_NAME);
-    if (ownerAddress) {
-      log(`✓ Resolved owner "${OWNER_NAME}" to address ${ownerAddress}.`);
+    log(`Attempting to resolve operator name "${OPERATOR_ADDRESS}"...`);
+    operatorAddress = await resolveName(OPERATOR_ADDRESS);
+    if (operatorAddress) {
+      log(`✓ Resolved operator "${OPERATOR_ADDRESS}" to address ${operatorAddress}.`);
     } else {
-      log(`✗ Failed to resolve owner "${OWNER_NAME}" to an address; owner-only commands disabled.`);
+      log(`✗ Failed to resolve operator "${OPERATOR_ADDRESS}" to an address; operator-only commands disabled.`);
     }
   } catch (err: any) {
-    log(`✗ Error resolving owner "${OWNER_NAME}": ${err.message}`);
-    log(`✗ Owner resolution error stack: ${err.stack}`);
+    log(`✗ Error resolving operator "${OPERATOR_ADDRESS}": ${err.message}`);
+    log(`✗ Operator resolution error stack: ${err.stack}`);
   }
 
   let attempt = 0;
@@ -872,7 +873,7 @@ async function main() {
   while (true) {
     try {
       log(`Starting agent attempt #${attempt + 1}...`);
-      await startAgent(privateKey, state, ownerAddress);
+      await startAgent(privateKey, state, operatorAddress);
       log(`Agent started successfully on attempt #${attempt + 1}`);
       return;
     } catch (err: any) {

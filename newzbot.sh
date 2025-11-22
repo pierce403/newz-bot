@@ -47,6 +47,11 @@ fi
 export NEWZBOT_LOG_PATH="$LOG_FILE"
 export NEWZBOT_KEY_PATH="$KEY_FILE"
 
+if [[ -n "${1:-}" ]]; then
+  export NEWZBOT_OPERATOR_ADDRESS="$1"
+  echo "Using operator address: $NEWZBOT_OPERATOR_ADDRESS" | tee -a "$LOG_FILE"
+fi
+
 echo "Launching XMTP agent (tail -f $LOG_FILE to monitor)..." | tee -a "$LOG_FILE"
 
 cd "$ROOT_DIR"

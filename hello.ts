@@ -11,7 +11,7 @@ import { createUser, createSigner } from '@xmtp/agent-sdk/user';
 const KEY_PATH = process.env.NEWZBOT_KEY_PATH || path.resolve(process.cwd(), 'newzbot.key');
 const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase() as XmtpEnv;
 // The operator address from agent/newzbot-agent-runtime.js
-const OPERATOR_ADDRESS = '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
+const OPERATOR_ADDRESS = process.env.NEWZBOT_OPERATOR_ADDRESS || '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
 
 async function main() {
   console.log(`Starting connectivity test...`);
@@ -52,7 +52,7 @@ async function main() {
   console.log('Return value:', result);
   console.log('Return value type:', typeof result);
   console.log('Message ID:', result?.id || 'no id');
-  
+
   if (result) {
     try {
       console.log('Full result:', JSON.stringify(result, Object.getOwnPropertyNames(result), 2));
@@ -62,7 +62,7 @@ async function main() {
   } else {
     console.log('Result is undefined/null - sendText() did not return a message object');
   }
-  
+
   console.log('\nConversation details:');
   console.log('  Conversation ID:', dm.id);
   console.log('  Topic:', dm.topic || 'none');
