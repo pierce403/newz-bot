@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import * as process from 'node:process';
 import { Wallet } from 'ethers';
 import { Agent, validHex, ConversationContext, type XmtpEnv } from '@xmtp/agent-sdk';
-import { createUser, createSigner } from '@xmtp/agent-sdk/user';
+import { createUser, createSigner, createNameResolver } from '@xmtp/agent-sdk/user';
 
 // Config mirroring newzbot-agent-runtime.js
 const KEY_PATH = process.env.NEWZBOT_KEY_PATH || path.resolve(process.cwd(), 'newzbot.key');
@@ -40,7 +40,22 @@ async function main() {
 
   console.log(`Agent initialized. Installation ID: ${agent.client.installationId}`);
 
-  const target = validHex(OPERATOR_ADDRESS);
+  let target: string;
+  try {
+    target = validHex(OPERATOR_ADDRESS);
+  } catch {
+    const resolveName = createNameResolver(process.env.WEB3BIO_API_KEY);
+    console.log(`Attempting to resolve operator name "${OPERATOR_ADDRESS}"...`);
+    const resolved = await resolveName(OPERATOR_ADDRESS);
+    if (!resolved) {
+      throw new Error(
+        `Could not resolve operator "${OPERATOR_ADDRESS}" to a hex address. ` +
+          `Set NEWZBOT_OPERATOR_ADDRESS to a 0x address or configure WEB3BIO_API_KEY.`,
+      );
+    }
+    console.log(`Resolved operator "${OPERATOR_ADDRESS}" to address ${resolved}.`);
+    target = validHex(resolved);
+  }
   console.log(`Sending 'hello' to ${target}...`);
 
   // Create DM and send message
