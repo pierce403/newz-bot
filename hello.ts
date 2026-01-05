@@ -12,6 +12,54 @@ const KEY_PATH = process.env.NEWZBOT_KEY_PATH || path.resolve(process.cwd(), 'ne
 const XMTP_ENV = (process.env.NEWZBOT_XMTP_ENV || process.env.XMTP_ENV || 'production').toLowerCase() as XmtpEnv;
 // The operator address from agent/newzbot-agent-runtime.js
 const OPERATOR_ADDRESS = process.env.NEWZBOT_OPERATOR_ADDRESS || '0xA2C6D9fd16a78199856aa41Ef8963b1832311605';
+const DEBUG_EVENTS_ENABLED = true;
+
+function logSection(title: string) {
+  console.log(`\n=== ${title} ===`);
+}
+
+function logValue(label: string, value: unknown) {
+  try {
+    const seen = new WeakSet();
+    const json = JSON.stringify(
+      value,
+      (_key, val) => {
+        if (typeof val === 'bigint') return val.toString();
+        if (val && typeof val === 'object') {
+          if (seen.has(val)) return '[Circular]';
+          seen.add(val);
+          const props = Object.getOwnPropertyNames(val);
+          const out: Record<string, unknown> | unknown[] = Array.isArray(val) ? [] : {};
+          for (const prop of props) {
+            try {
+              (out as Record<string, unknown>)[prop] = (val as Record<string, unknown>)[prop];
+            } catch (err: any) {
+              (out as Record<string, unknown>)[prop] = `[unavailable: ${err?.message || err}]`;
+            }
+          }
+          return out;
+        }
+        return val;
+      },
+      2,
+    );
+    console.log(`${label}: ${json}`);
+  } catch {
+    console.log(`${label}:`);
+    console.dir(value, { depth: 6, colors: false });
+  }
+}
+
+async function tryLog<T>(label: string, fn: () => Promise<T> | T) {
+  try {
+    const value = await fn();
+    logValue(label, value);
+    return value;
+  } catch (err: any) {
+    console.log(`${label}: <error> ${err?.message || err}`);
+    return undefined;
+  }
+}
 
 async function main() {
   console.log(`Starting connectivity test...`);
@@ -36,9 +84,20 @@ async function main() {
   const agent = await Agent.create(signer, {
     env: XMTP_ENV,
     dbPath,
+    debugEventsEnabled: DEBUG_EVENTS_ENABLED,
   });
 
   console.log(`Agent initialized. Installation ID: ${agent.client.installationId}`);
+
+  logSection('Client info');
+  console.log(`Client inboxId: ${agent.client.inboxId}`);
+  console.log(`Client installationId: ${agent.client.installationId}`);
+  console.log(`Client isRegistered: ${agent.client.isRegistered}`);
+  console.log(`Agent address: ${agent.address || 'unknown'}`);
+  logValue('Client options', agent.client.options);
+  await tryLog('Client debug apiStatistics', () => agent.client.debugInformation.apiStatistics());
+  await tryLog('Client debug identityStatistics', () => agent.client.debugInformation.apiIdentityStatistics());
+  await tryLog('Client debug aggregateStatistics', () => agent.client.debugInformation.apiAggregateStatistics());
 
   let target: string;
   try {
@@ -56,32 +115,35 @@ async function main() {
     console.log(`Resolved operator "${OPERATOR_ADDRESS}" to address ${resolved}.`);
     target = validHex(resolved);
   }
-  console.log(`Sending 'hello' to ${target}...`);
-
-  // Create DM and send message
+  logSection('Conversation');
   const dm = await agent.createDmWithAddress(target);
   const ctx = new ConversationContext({ conversation: dm, client: agent.client });
+  console.log(`Conversation ID: ${dm.id}`);
+  console.log(`Peer inbox ID: ${dm.peerInboxId}`);
+  console.log(`Consent state: ${dm.consentState}`);
+  console.log(`Context state: allowed=${ctx.isAllowed} denied=${ctx.isDenied} unknown=${ctx.isUnknown}`);
+  await tryLog('Conversation debugInfo', () => dm.debugInfo());
 
-  const result = await ctx.sendText('hello');
-  console.log('Message sent!');
-  console.log('Return value:', result);
-  console.log('Return value type:', typeof result);
-  console.log('Message ID:', result?.id || 'no id');
+  logSection('Send');
+  console.log(`Sending 'hello' to ${target}...`);
+  const messageId = await dm.send('hello');
+  console.log(`Message sent. Message ID: ${messageId}`);
 
-  if (result) {
-    try {
-      console.log('Full result:', JSON.stringify(result, Object.getOwnPropertyNames(result), 2));
-    } catch (e) {
-      console.log('Could not stringify result:', e);
-    }
-  } else {
-    console.log('Result is undefined/null - sendText() did not return a message object');
-  }
+  logSection('Post-send checks');
+  await tryLog('Sync result', () => dm.sync());
+  await tryLog('Last message', () => dm.lastMessage());
+  await tryLog('Recent messages (limit 5)', () => dm.messages({ limit: 5 }));
+  await tryLog('Client debug apiStatistics (after send)', () => agent.client.debugInformation.apiStatistics());
+  await tryLog('Client debug identityStatistics (after send)', () => agent.client.debugInformation.apiIdentityStatistics());
+  await tryLog('Client debug aggregateStatistics (after send)', () => agent.client.debugInformation.apiAggregateStatistics());
 
   console.log('\nConversation details:');
   console.log('  Conversation ID:', dm.id);
-  console.log('  Topic:', dm.topic || 'none');
-  console.log('  Peer address:', dm.peerAddress || 'none');
+  // dm.topic and dm.peerAddress may not be available in all SDK versions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dmAny = dm as any;
+  console.log('  Topic:', dmAny.topic || 'none');
+  console.log('  Peer address:', dmAny.peerAddress || 'none');
 
   // Exit successfully
   process.exit(0);
