@@ -1,0 +1,27 @@
+{
+  "name": "gdelt-xmtp-news-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "cli": "node dist/cli.js",
+    "server": "node dist/server.js",
+    "xmtp": "node dist/xmtp-runner.js",
+    "digest": "node dist/digest-runner.js",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test:unit": "npm run build && node --test dist/tests/command-parser.test.js dist/tests/clustering.test.js dist/tests/formatting.test.js",
+    "test:integration": "npm run build && RUN_GDELT_INTEGRATION=1 node --test dist/tests/gdelt.integration.test.js"
+  },
+  "dependencies": {
+    "@xmtp/agent-sdk": "^2.3.0",
+    "viem": "^2.38.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.8.1",
+    "typescript": "^5.9.3"
+  }
+}
