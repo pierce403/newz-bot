@@ -172,3 +172,10 @@ src/
 - XMTP agents guide: https://docs.xmtp.org/llms/llms-agents.txt
 - XMTP fund agents and apps: https://docs.xmtp.org/fund-agents-apps/get-started
 - GDELT project: https://www.gdeltproject.org/
+
+## Licensing scope
+
+Original code and documentation authored for this project by Dean Pierce are licensed under the [Apache License 2.0](LICENSE).
+Third-party dependencies, assets, and quoted material retain their respective licenses and notices. This grant does not relicense third-party work.
+
+Any retained Vercel template/scaffolding is excluded from this grant and retains its upstream terms.
